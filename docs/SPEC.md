@@ -1,20 +1,20 @@
-# ESP32-S3 LCC Lighting Scene Controller — Specification
+# ESP32-S3 LCC Turnout Control Panel — Specification
 
 ## 1. Purpose and Scope
 
-This project implements an ESP32-S3–based LCC lighting scene controller with a touch LCD user interface.
+This project implements an ESP32-S3–based LCC turnout control panel with a touch LCD user interface.
 
 The device:
 - Connects to an LCC/OpenLCB CAN bus using OpenMRN
-- Sends lighting commands to existing follower lighting controller boards
-- Provides a touch UI for manual RGBW + brightness control and scene selection
-- Stores configuration and scenes on an SD card
-- Uses ESP-IDF v5.4, FreeRTOS, LVGL, and OpenMRN
+- Sends and receives turnout control events
+- Provides a touchscreen interface for turnout monitoring and control
+- Stores configuration and turnout definitions on an SD card
+- Uses ESP-IDF v5.1.6, FreeRTOS, LVGL, and OpenMRN
 
 Out of scope:
-- Acting as a lighting follower
-- Direct LED driving
-- Editing follower firmware
+- Acting as a turnout decoder (motor driver)
+- Direct servo/motor control
+- Signal or lighting control
 
 ---
 
@@ -56,7 +56,7 @@ These must be converted to proper C `#include` wrapper files. Example:
 `WIFI_EVENT_HOME_CHANNEL_CHANGE`) and must be excluded from the build in 
 `components/OpenMRN/CMakeLists.txt` when using ESP-IDF 5.1.6.
 
-**FAT Long Filename Support**: `scenes.json` requires FAT LFN support. Enable in 
+**FAT Long Filename Support**: `turnouts.json` requires FAT LFN support. Enable in 
 `sdkconfig`:
 ```
 CONFIG_FATFS_LFN_HEAP=y
@@ -67,71 +67,50 @@ CONFIG_FATFS_MAX_LFN=255
 - LVGL calls must only occur from the UI task
 - SD card I/O must not occur in the UI task
 - CAN traffic must obey defined rate limits
-- Scene file writes must be atomic
+- Turnout file writes must be atomic
 
 ---
 
 ## 3. LCC Event Model (Authoritative)
 
-### 3.1 Base Event ID Format
+### 3.1 Turnout Event Pairs
 
-`05.01.01.01.9F.60.0x.00`
+Each turnout is defined by two 64-bit LCC event IDs:
+- **Normal Event**: Produced when closing turnout, consumed to detect closed state
+- **Reverse Event**: Produced when throwing turnout, consumed to detect thrown state
 
+Event IDs are fully user-configurable per turnout and stored in `turnouts.json`.
 
-Where `x` selects the lighting parameter:
+### 3.2 Event Consumption
 
-| Parameter   | x | Description |
-|------------|---|-------------|
-| Red        | 0 | Red channel target (0-255) |
-| Green      | 1 | Green channel target (0-255) |
-| Blue       | 2 | Blue channel target (0-255) |
-| White      | 3 | White channel target (0-255) |
-| Brightness | 4 | Master brightness target (0-255) |
-| Duration   | 5 | Transition time in seconds (0-255) |
+The panel acts as an event consumer for state feedback:
 
-### 3.2 Value Encoding
+| Message Type | Action |
+|-------------|--------|
+| EventReport | Update turnout state (Normal or Reverse) based on which event was received |
+| ProducerIdentified (valid) | Update turnout state from query response |
+| IdentifyConsumer | Respond with ConsumerIdentified for registered events |
+| IdentifyGlobal | Respond with ConsumerIdentified for all registered events |
 
-- The final `.00` byte encodes an unsigned 8-bit value
-- Valid range: 0–255
-- Brightness is not a multiplier; it is a peer parameter
-- Brightness behavior is implemented in WS2814 hardware
-- Duration value of 0 means instant apply (no fade)
-- Duration value of 1-255 triggers fade over that many seconds
+### 3.3 Event Production
 
-### 3.3 Transmission Protocol
+When the user taps a turnout tile, the panel sends a single event:
+- Current state NORMAL → send Reverse event (to throw)
+- Current state REVERSE, UNKNOWN, or STALE → send Normal event (to close)
 
-**Duration-Triggered Fade Architecture:**
+### 3.4 State Query Protocol
 
-The touchscreen sends all 6 parameters as a command set. The Duration event 
-triggers the fade on LED controllers, which perform local interpolation at ~60fps.
+On startup, the panel queries turnout positions:
+1. For each registered turnout, send `IdentifyConsumer` for both Normal and Reverse events
+2. Queries are paced at configurable interval (default 100ms) to avoid bus congestion
+3. Turnout decoders respond with `ProducerIdentified` messages
+4. Panel updates tile colors based on responses
 
-1. Touchscreen sends: R, G, B, W, Brightness (target values)
-2. Touchscreen sends: Duration (triggers fade on receivers)
-3. LED controllers capture pending targets when RGBW+Br received
-4. LED controllers start local fade when Duration received
-5. Local fade runs at ~60fps for smooth transitions
+### 3.5 Discovery Mode
 
-**Benefits of this architecture:**
-- Only 6 LCC events per scene change (minimal bus traffic)
-- High-fidelity fading at 60fps on LED controllers
-- No dropped updates due to bus congestion
-- Touchscreen is free for UI interaction during fades
-
-### 3.4 Long Fade Segmentation
-
-For fades exceeding 255 seconds (the maximum Duration value):
-
-1. Total duration is divided into N equal-length segments
-2. Each segment is ≤255 seconds
-3. Intermediate target colors are calculated proportionally
-4. Each segment sends 6 events with its portion of the transition
-5. Touchscreen tracks overall progress for UI display
-
-**Example:** 10-minute (600s) fade:
-- 3 segments of 200s each
-- Segment 1: 33% of color delta, 200s duration
-- Segment 2: 66% of color delta, 200s duration  
-- Segment 3: 100% of color delta, 200s duration
+When enabled, the panel captures all `EventReport` messages on the bus regardless
+of registration. This allows users to identify event IDs by operating turnouts
+manually and observing which events appear.
 
 ---
 
@@ -152,62 +131,68 @@ Rules:
 ### LCC Configuration (CDI/ACDI)
 
 The device uses OpenMRN's CDI (Configuration Description Information) for:
-- **Base Event ID**: 8-byte event ID prefix stored at CDI offset 132
-- **Startup Behavior**: Auto-apply settings (see below)
+- **Panel Settings**: Screen timeout, stale timeout, query pace
 - **User Name/Description**: Stored in ACDI user space (space 251)
 
-**CDI Memory Layout:**
+**CDI Memory Layout (PanelConfig):**
 | Offset | Size | Content |
 |--------|------|---------|
 | 0 | 4 | InternalConfigData (version, etc.) |
-| 4 | 1 | Auto-Apply Enabled (0=disabled, 1=enabled) |
-| 5 | 2 | Auto-Apply Duration (seconds, 0-300) |
-| 7 | 2 | Screen Backlight Timeout (seconds, 0=disabled, 10-3600) |
-| 9 | ... | Reserved |
-| 132 | 8 | Base Event ID |
+| 4 | 2 | Screen Backlight Timeout (seconds, 0=disabled, 10-3600) |
+| 6 | 2 | Stale Timeout (seconds, 0=disabled, 0-65535) |
+| 8 | 2 | Query Pace (milliseconds, 10-5000) |
 
-**Startup Configuration:**
+**Panel Configuration:**
 | Setting | Default | Range | Description |
 |---------|---------|-------|-------------|
-| Auto-Apply Enabled | 1 | 0-1 | Apply first scene on boot |
-| Auto-Apply Duration | 10 | 0-300 | Fade duration in seconds |
 | Screen Timeout | 60 | 0, 10-3600 | Backlight timeout in seconds (0=disabled) |
+| Stale Timeout | 300 | 0-65535 | Seconds without update before turnout marked stale (0=disabled) |
+| Query Pace | 100 | 10-5000 | Milliseconds between event queries at startup |
 
 **SNIP (Simple Node Information Protocol):**
 - Manufacturer: "IvanBuilds"
-- Model: "LCC Touchscreen Controller"
+- Model: "LCC Turnout Panel"
 - Hardware Version: "ESP32S3 LCD 4.3B"
-- Software Version: Read from `SNIP_STATIC_DATA`
+- Software Version: "2.0.0"
 
 **Implementation Note:** User info (name/description) uses `space="251"` (ACDI user
 space) with `origin="1"` to avoid conflicts with manufacturer info at origin 0.
 
 ---
 
-## 5. Scene File Format
+## 5. Turnout File Format
 
-### File: `scenes.json`
+### File: `turnouts.json`
 
 ```json
 {
   "version": 1,
-  "scenes": [
-    { "name": "sunrise", "brightness": 180, "r": 255, "g": 120, "b": 40, "w": 0 },
-    { "name": "night",   "brightness": 30,  "r": 10,  "g": 10,  "b": 40, "w": 0 }
+  "turnouts": [
+    {
+      "name": "Main Yard Lead",
+      "event_normal": "05.01.01.01.40.00.00.00",
+      "event_reverse": "05.01.01.01.40.00.00.01"
+    },
+    {
+      "name": "Siding Switch",
+      "event_normal": "05.01.01.01.40.00.01.00",
+      "event_reverse": "05.01.01.01.40.00.01.01"
+    }
   ]
 }
-
 ```
 
 Rules:
-- Values are integers 0–255
-- Scene names must be unique
-- Writes must be atomic
+- Event IDs are 8-byte values in dotted hex format
+- Turnout names should be unique (for user clarity)
+- Maximum 150 turnouts supported
+- Writes must be atomic (full file rewrite)
 - Version mismatches must be detected
 
 ---
 
 ## 6. Functional Requirements
+
 ### Boot
 
 #### FR-001
@@ -221,26 +206,17 @@ AC: Node visible on LCC network with configured ID.
 #### FR-003
 Transition to main UI within 5 s of LCC readiness or timeout.
 
-#### FR-004 (Implemented)
+#### FR-004
 If SD card is not detected at boot, display error screen with:
 - Warning icon and "SD Card Not Detected" title
-- Instructions listing required files (nodeid.txt, scenes.json)
+- Instructions listing required files (nodeid.txt, turnouts.json)
 - Screen persists until device restart
 
 **Implementation Note:** SD card retry is not performed after error screen is shown
 because `waveshare_sd_init()` reinitializes CH422G and SPI, which interferes with
 the RGB LCD display operation. User must insert card and restart device.
 
-#### FR-005 (Implemented)
-Auto-apply first scene on boot when enabled via LCC configuration:
-- Configurable enable/disable (default: enabled)
-- Configurable fade duration (default: 10 seconds, range 0-300)
-- Assumes initial lighting state is all zeros (lights off)
-- Progress bar shows fade progress on Scene Selector tab
-
-AC: First scene fades in over configured duration after UI loads.
-
-#### FR-006 (Implemented)
+#### FR-005
 Screen backlight timeout for power saving:
 - Configurable timeout via LCC configuration (default: 60 seconds)
 - Set to 0 to disable timeout (always on)
@@ -250,105 +226,70 @@ Screen backlight timeout for power saving:
 
 AC: Backlight turns off after configured idle period; touch wakes screen.
 
+#### FR-006
+On boot, query all registered turnout positions:
+- Send IdentifyConsumer for each registered turnout event
+- Pace queries at configurable interval (default 100ms)
+- Update tile states as responses arrive
+
+AC: Turnout tiles reflect current positions within a few seconds of boot.
+
 ### Main UI
 
 #### FR-010
-Provide two tabs: Scene Selector (left) and Manual Control (right).
-Scene Selector is the default tab shown on startup.
+Provide two tabs: Turnouts (left) and Add Turnout (right).
+Turnouts tab is the default tab shown on startup.
 
-### Manual Control
+### Turnout Switchboard
 
 #### FR-020
-Provide sliders for Brightness, R, G, B, W.
+Display a grid of color-coded turnout tiles loaded from turnouts.json.
+- Tiles are 150×80 pixels in a flex-wrap layout
+- Each tile shows turnout name and current state text
+- Green = Normal, Yellow = Reverse, Grey = Unknown, Red = Stale
+
+AC: All registered turnouts are shown with correct color coding.
 
 #### FR-021
-No CAN traffic until Apply is pressed.
+Tapping a turnout tile toggles its state:
+- If NORMAL → send Reverse event
+- If REVERSE/UNKNOWN/STALE → send Normal event
+- Mark tile as pending (blue border) until state feedback received
+
+AC: Tile sends correct event and shows pending indicator.
 
 #### FR-022
-Apply transmits all parameters respecting rate limits.
+Update tile state in real-time as EventReport and ProducerIdentified messages arrive.
+AC: Tile color changes within one LVGL refresh cycle of event reception.
 
 #### FR-023
-Save Scene opens modal dialog with Save and Cancel.
+Mark turnouts as STALE when no state update received within configurable timeout.
+AC: Tile turns red after stale timeout expires without any state update.
 
-#### FR-024 (Implemented)
-Display color preview circle showing approximate light output from current RGBW + brightness settings.
-- Circle updates in real-time as sliders are adjusted
-- Uses additive light mixing algorithm
-- White channel blends towards white while preserving hue
-- Brightness acts as intensity using gamma curve
+### Add Turnout
 
-AC: Circle color reflects approximate visual output of RGBW combination.
+#### FR-030
+Provide manual turnout entry form with:
+- Name text input
+- Normal Event ID text input (dotted hex format)
+- Reverse Event ID text input (dotted hex format)
+- On-screen keyboard for text entry
+- Add button to save turnout
 
-### Scene Selector
+AC: Valid turnout is added to turnouts.json and appears on Turnouts tab.
 
-#### FR-040
-Display horizontal swipeable card carousel loaded from SD.
-- Cards are 240×260 pixels with 20px gap
-- Each card shows color preview circle, scene name, and RGBW values
-- Carousel uses center snap scrolling
-- Selected card shows blue border highlight
-- Each card has edit button (top-left) and delete button (top-right) with confirmation modal
-- Padding constrains scroll so first/last cards center properly
+#### FR-031
+Provide discovery mode toggle:
+- When enabled, capture all EventReport messages on the bus
+- Display discovered events in a scrollable list
+- User can select events from the list to populate the form
 
-#### FR-041
-Transition duration slider: 0–300 s.
-
-#### FR-042
-Apply performs linear fade to target scene.
-
-#### FR-043
-Progress bar reflects transition completion.
-
-### Scene Editing
-
-#### FR-044 (Implemented)
-Each scene card shall have an Edit button that opens an edit modal.
-- Edit button displayed in top-left corner of card (blue circle with pencil icon)
-- Tapping Edit opens modal with current scene values pre-populated
-
-AC: Tapping Edit button shows modal with current scene values.
-
-#### FR-045 (Implemented)
-Edit modal shall allow modifying scene name, brightness, and RGBW values.
-- Text input field for scene name with on-screen keyboard
-- Five sliders for brightness, R, G, B, W (0-255 each)
-- Color preview circle updates in real-time as values change
-
-AC: All fields are editable and changes are reflected in color preview.
-
-#### FR-046 (Implemented)
-Edit modal shall provide Move Left/Right buttons to reorder scenes.
-- Move Left button shifts scene one position earlier in carousel
-- Move Right button shifts scene one position later in carousel
-- Buttons are disabled at respective ends of the scene list
-
-AC: Scene position in carousel changes after reorder operation.
-
-#### FR-047 (Implemented)
-Scene edits shall be validated before saving:
-- Name cannot be empty
-- Name must be unique (except when unchanged)
-
-AC: Save operation fails gracefully if validation fails.
-
-#### FR-048 (Implemented)
-Scene edits shall be written atomically to SD card.
-- Scene storage maintains in-memory cache
-- Full scenes.json file is rewritten on each change
-- File operations are flushed before closing
-
-AC: Power loss during save does not corrupt scenes.json.
+AC: Events seen on bus appear in discovery list within 1 second.
 
 ### CAN Rate Limiting
 
 #### FR-050
-Minimum transmission interval: 20 ms.
-
-#### FR-051
-If step size < 1, increase interval to meet duration.
-
-#### FR-052
-Total duration accuracy: ±2%.
+Minimum transmission interval: configurable (default 20ms).
 
 ---
 
@@ -398,6 +339,7 @@ AC: Firmware update progress visible in serial monitor.
 
 ## 7. Non-Functional Requirements
 - UI must not block > 50 ms
-- Scene save must be power-loss safe
-- Logging must not exceed 5 Hz during fades
+- Turnout file save must be power-loss safe
 - CAN disconnect must not require reboot
+- Maximum 150 turnouts supported
+- State updates must reach UI within one LVGL refresh cycle

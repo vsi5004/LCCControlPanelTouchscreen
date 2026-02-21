@@ -26,7 +26,8 @@ LCCControlPanelTouchscreen/
 │   │   ├── turnout_manager.c/.h  # Thread-safe turnout state management
 │   │   ├── turnout_storage.c/.h  # SD card JSON persistence
 │   │   ├── screen_timeout.c/.h   # Backlight power saving
-│   │   └── bootloader_hal.cpp/.h # OTA bootloader support
+│   │   ├── bootloader_hal.cpp/.h # OTA bootloader support
+│   │   └── bootloader_display.c/.h # LCD status during OTA updates
 │   └── ui/                   # LVGL screens
 │       ├── ui_common.c/.h    # LVGL init, mutex, flush callbacks, data types
 │       ├── ui_main.c         # Main tabview container (Turnouts + Add Turnout)
@@ -63,9 +64,9 @@ LCCControlPanelTouchscreen/
 
 ## 3. Inter-Task Communication
 
-- **UI → Lighting**: FreeRTOS queue (commands: UPDATE, APPLY_SCENE, CANCEL)
-- **Lighting → LCC**: Direct OpenMRN event producer API
-- **SD Worker → UI**: FreeRTOS queue (notifications: SCENE_LOADED, SAVE_COMPLETE)
+- **LCC → Turnout Manager**: `turnout_manager_set_state_by_event()` called from TurnoutEventHandler
+- **Turnout Manager → UI**: State change callback via `lv_async_call()` (packs index+state into uint32)
+- **UI → LCC**: `lcc_node_send_event()` called from tile tap handler
 - **LVGL mutex**: Required for all LVGL API access from non-UI tasks
 
 ---
@@ -82,27 +83,26 @@ BOOT → SPLASH → LCC_INIT → MAIN_UI
       MAIN_UI ← MAIN_UI (degraded)
 ```
 
-### Lighting State (Fade Controller)
+### Turnout State
+
+Each turnout can be in one of four states:
 
 ```
-IDLE ←──────────────────┐
-  │                     │
-  ├─ start() ──→ FADING │
-  │                ↓    │
-  │            COMPLETE─┘
-  │
-  └─ apply_immediate() ─→ (sends all 6 params with Duration=0, stays IDLE)
+UNKNOWN ──(EventReport/ProducerIdentified)──→ NORMAL or REVERSE
+NORMAL  ──(EventReport: reverse event)──────→ REVERSE
+REVERSE ──(EventReport: normal event)───────→ NORMAL
+ANY     ──(stale timeout exceeded)──────────→ STALE
+STALE   ──(EventReport/ProducerIdentified)──→ NORMAL or REVERSE
 ```
 
-**Implemented in `fade_controller.c`:**
-- `fade_controller_start()`: Sends target + duration, tracks segment progress
-- `fade_controller_apply_immediate()`: Sends all 6 params with Duration=0 (instant)
-- `fade_controller_tick()`: Called periodically, advances to next segment when needed
-- `fade_controller_get_progress()`: Returns 0.0-1.0 for progress bar updates
-- `fade_controller_abort()`: Cancels active fade, resets to IDLE
-
-**Protocol:** Duration-triggered (6 events per scene change)
-**Fading:** Performed locally by LED controllers at ~60fps
+**State Colors:**
+| State | Color | Hex |
+|-------|-------|-----|
+| NORMAL | Green | 0x4CAF50 |
+| REVERSE | Yellow | 0xFFC107 |
+| UNKNOWN | Grey | 0x9E9E9E |
+| STALE | Red | 0xF44336 |
+| PENDING | Blue border | 0x2196F3 |
 
 ---
 
@@ -135,11 +135,10 @@ The following settings optimize scroll and animation performance:
 | `LV_ATTRIBUTE_FAST_MEM` | IRAM | sdkconfig | Place critical functions in IRAM |
 
 **Additional Optimizations:**
-- Scene cards omit shadows to improve scroll frame rate
-- Fade animations use 20 discrete opacity steps to reduce mid-frame inconsistencies
 - LVGL task pinned to CPU1 to avoid contention with LCD DMA on CPU0
+- Fade animations for screen timeout use 20 discrete opacity steps
 
-### Driver
+### CAN Driver
 - Uses `Esp32HardwareTwai` from OpenMRN
 - VFS path: `/dev/twai/twai0`
 - Pins: TX=GPIO15, RX=GPIO16
@@ -151,12 +150,15 @@ The following settings optimize scroll and animation performance:
 4. Initialize OpenMRN SimpleCanStack
 5. Add CAN port via `add_can_port_async("/dev/twai/twai0")`
 
-### Auto-Apply on Boot
-When enabled via LCC configuration (CDI):
-1. Load first scene from `scenes.json`
-2. Assume initial lighting state is all zeros
-3. Start fade to first scene using configured duration (default 10 sec)
-4. Progress bar on Scene Selector tab shows fade progress
+### TurnoutEventHandler
+
+Custom `openlcb::SimpleEventHandler` subclass that handles:
+- **EventReport**: Updates turnout state when events are received on the bus
+- **ProducerIdentified**: Updates state from query responses
+- **IdentifyConsumer**: Responds to consumer identification requests
+- **IdentifyGlobal**: Responds to global identification requests
+
+Events are registered/unregistered dynamically as turnouts are added or removed.
 
 ### Power Saving (Screen Timeout)
 The `screen_timeout` module provides automatic backlight control with smooth transitions:
@@ -182,109 +184,71 @@ ACTIVE ──(timeout)──→ FADING_OUT ──(fade complete)──→ OFF
 
 **Fade Animation:**
 - Uses LVGL overlay on `lv_layer_top()` for smooth black fade effect
-- 1 second fade-out before backlight turns off (less jarring than abrupt shutoff)
-- 1 second fade-in when waking to restore UI gradually
+- 1 second fade-out before backlight turns off
+- 1 second fade-in when waking
 - Touch during fade-out aborts and transitions to fade-in
 - Animation uses `lv_anim` with opacity interpolation (LV_OPA_TRANSP ↔ LV_OPA_COVER)
 - **Stepped Opacity**: Uses 20 discrete opacity levels to reduce banding artifacts
-  caused by RGB LCD bounce buffer partial frame updates
 
 **Hardware Limitation:** The CH422G I/O expander provides only digital on/off control
 for the backlight pin. PWM dimming is not possible with this hardware design. The fade
 effect is achieved via LVGL overlay opacity animation while backlight remains on.
 
-### Event Production
-- Event ID format: `{base_event_id[0:6]}.{param_offset}.{value}`
-- 6 parameters: R (0), G (1), B (2), W (3), Brightness (4), Duration (5)
-- Duration event triggers fade on LED controllers
+### Event Production & Consumption
+- **Production**: `lcc_node_send_event(uint64_t event_id)` — sends turnout commands
+- **Consumption**: TurnoutEventHandler processes incoming EventReport and ProducerIdentified
+- **Query**: `lcc_node_query_all_turnout_states()` — sends IdentifyConsumer for each registered event at startup
+- **Discovery**: `lcc_node_set_discovery_mode()` — enables/disables capturing unknown events for the Add Turnout tab
 
 ---
 
-## 6. Fade Algorithm (Normative)
+## 6. Turnout Manager
 
-### Duration-Triggered Fade Protocol
+### Thread Safety
 
-The touchscreen acts as a command station, sending target values and transition 
-duration to LED controllers. LED controllers perform local high-fidelity fading.
+The turnout manager uses a FreeRTOS mutex to protect all state access. The LCC
+event handler (running on the OpenMRN executor) and the LVGL UI task both access
+turnout state through this mutex.
 
-**Touchscreen responsibilities:**
-1. Calculate target RGBW + Brightness values from scene
-2. Send all 6 LCC events (R, G, B, W, Brightness, Duration)
-3. Track progress for UI display (progress bar)
-4. Handle long fades (>255s) via segmentation
+### State Update Flow
 
-**LED controller responsibilities:**
-1. Store pending R, G, B, W, Brightness as they arrive
-2. On Duration event, capture current values as fade start
-3. Interpolate from current to pending over Duration seconds
-4. Update LEDs at ~60fps (16ms intervals) for smooth transitions
-5. Duration=0 means instant apply (no interpolation)
-
-### Long Fade Segmentation
-
-For fades exceeding 255 seconds:
-
-1. Divide total duration into N equal segments (each ≤255s)
-2. For each segment:
-   - Calculate intermediate target (linear interpolation)
-   - Send 6 events with segment duration
-   - Wait for segment to complete
-3. All segments have equal duration = total / N
-4. Progress = (completed_segments + current_segment_progress) / N
-
-**Example: 5-minute (300s) fade**
-- 2 segments of 150s each
-- Segment 1: 50% of color delta over 150s
-- Segment 2: remaining 50% over 150s
-
-### Implementation Details (`fade_controller.c`)
-- **State Machine**: IDLE → FADING → COMPLETE → IDLE
-- **Segment Tracking**: current_segment / total_segments
-- **Progress Tracking**: Overall progress across all segments for UI
-- **Equal Segments**: All segments have identical duration (simpler math)
-- **Immediate Apply**: Duration=0 sends target with 0s duration (instant)
-
-### UI Integration
-- **Scene Selector Tab** (leftmost): Card carousel with color preview circles, "Apply" starts fade, progress bar
-- **Manual Control Tab**: RGBW sliders, color preview circle, "Apply" calls `fade_controller_apply_immediate()`
-- **Progress Bar**: LVGL timer (100ms) polls `fade_controller_get_progress()`, hides when fade completes
-- **Auto-Apply on Boot**: Calls `ui_scenes_start_progress_tracking()` to show fade progress
-- **Scene Editing**: Edit modal with sliders, name input, and reorder buttons
-- **Scene Cards**: Each card has edit (pencil) and delete (trash) buttons
-
-### LVGL Thread Safety
-All LVGL API calls must occur from the LVGL task context. When modifying UI from 
-non-UI tasks, acquire the mutex via `ui_lock()`/`ui_unlock()`.
-
-**Important:** LVGL callbacks already run in LVGL context. Functions that update 
-UI from callbacks must use no-lock variants to avoid deadlock:
-- `scene_storage_reload_ui()` — Use from non-UI tasks (acquires mutex)
-- `scene_storage_reload_ui_no_lock()` — Use from LVGL callbacks (no mutex)
-
----
-
-## 7. Color Preview Algorithm
-
-The `ui_calculate_preview_color()` function approximates RGBW LED visual output for display.
-
-### Mixing Rules
-```c
-// White blends towards white (80% max at W=255)
-full_r = r + ((255 - r) * w) / 320;
-full_g = g + ((255 - g) * w) / 320;
-full_b = b + ((255 - b) * w) / 320;
-
-// Brightness as intensity (gamma 0.5 via square root)
-intensity = sqrt(brightness * 255);  // 0-255
-
-// Final output
-result = (full_rgb * intensity) / 255;
+```
+LCC Event Received
+     │
+     ▼
+TurnoutEventHandler::handle_event_report()
+     │
+     ▼
+turnout_manager_set_state_by_event()  [acquires mutex]
+     │
+     ▼
+state_change_callback(index, new_state)
+     │
+     ▼
+lv_async_call(ui_turnouts_update_tile_async, packed_data)
+     │
+     ▼
+LVGL task unpacks index+state, updates tile color
 ```
 
-### Design Rationale
-- **Additive Light Mixing**: RGB channels combine as light, not pigments
-- **White Preservation**: High white values brighten but don't completely wash out color
-- **Perceptual Brightness**: Square root curve makes low brightness values more visible
+### Stale Detection
+
+The main task periodically calls `turnout_manager_check_stale(timeout_ms)` to mark
+turnouts as stale when no state update has been received within the timeout period.
+`last_update_us` is tracked per turnout using `esp_timer_get_time()`.
+
+---
+
+## 7. LVGL Thread Safety
+
+All LVGL API calls must occur from the LVGL task context. When modifying UI from 
+non-UI tasks, use `lv_async_call()` to schedule updates on the LVGL task.
+
+**Cross-task UI updates** pack data into a `uint32_t` parameter:
+- Bits 31-16: turnout index
+- Bits 15-0: turnout state enum value
+
+This avoids heap allocation for simple state update notifications.
 
 ---
 
@@ -358,7 +322,7 @@ OpenMRN `bootloader_client` command-line utility without physical access to the 
 1. Connect JMRI to LCC network (CAN-USB adapter or LCC hub)
 2. Open **LCC Menu → Firmware Update**
 3. Select target node by Node ID
-4. Choose firmware `.bin` file (from `build/LCCLightingTouchscreen.bin`)
+4. Choose firmware `.bin` file (from `build/LCCControlPanelTouchscreen.bin`)
 5. Click "Download" to start update
 6. Device shows progress on LCD (blue header, status text, progress bar)
 7. Device reboots automatically when complete

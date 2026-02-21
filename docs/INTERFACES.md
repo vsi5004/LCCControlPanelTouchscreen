@@ -62,7 +62,7 @@ Write `0x01` to address `0x24` to set output mode.
 | File | Purpose |
 |------|---------|
 | `/sdcard/nodeid.txt` | LCC Node ID (plain text, dotted hex) |
-| `/sdcard/scenes.json` | Scene definitions (auto-created if missing) |
+| `/sdcard/turnouts.json` | Turnout definitions (name + event ID pairs) |
 | `/sdcard/splash.jpg` | Boot splash image |
 | `/sdcard/openmrn_config` | OpenMRN persistent config (auto-created) |
 
@@ -142,37 +142,41 @@ framebuffer data from PSRAM to the display controller:
 
 ---
 
-## 7. LCC Event Mapping
+## 7. LCC Event Model
 
 ### Node ID
 Configured in `/sdcard/nodeid.txt` (14 hex digits with dots, e.g., `05.01.01.01.9F.60.00`)
 
-### Base Event ID
-Configured via LCC CDI, stored in `/sdcard/openmrn_config` at offset 132.
-Default: `05.01.01.01.9F.60.00.00`
+### Turnout Event Pairs
 
-### Parameter Offsets
-| Parameter | Offset (byte 6) | Event ID Example |
-|-----------|-----------------|------------------|
-| Red | 0x00 | 05.01.01.01.9F.60.00.xx |
-| Green | 0x01 | 05.01.01.01.9F.60.01.xx |
-| Blue | 0x02 | 05.01.01.01.9F.60.02.xx |
-| White | 0x03 | 05.01.01.01.9F.60.03.xx |
-| Brightness | 0x04 | 05.01.01.01.9F.60.04.xx |
-| Duration | 0x05 | 05.01.01.01.9F.60.05.xx |
+Each turnout is defined by two 64-bit LCC event IDs:
+- **Normal Event**: Produced/consumed when turnout is in Normal (closed) position
+- **Reverse Event**: Produced/consumed when turnout is in Reverse (thrown) position
 
-Where `xx` is the parameter value (0x00–0xFF).
+Event IDs are user-configurable per turnout and stored in `turnouts.json` in dotted-hex format.
 
-### Duration-Triggered Fade Protocol
+### Event Consumption
 
-The touchscreen sends all 6 parameters as a command set:
-1. R, G, B, W, Brightness — target values stored by LED controllers
-2. Duration — triggers fade from current to pending values
+The panel consumes the following OpenLCB messages:
+| Message | Purpose |
+|---------|---------|
+| EventReport | Turnout state changed (update tile immediately) |
+| ProducerIdentified | Response to state query (update tile) |
 
-**LED controllers perform local interpolation at ~60fps for smooth transitions.**
+### Event Production
 
-Duration value meanings:
-- `0x00` — Instant apply (no fade)
-- `0x01`–`0xFF` — Fade over 1–255 seconds
+The panel produces events when the user taps a turnout tile:
+- If current state is NORMAL → sends Reverse event
+- If current state is REVERSE or UNKNOWN/STALE → sends Normal event
 
-For fades >255 seconds, the touchscreen segments into equal chunks.
+### State Query at Startup
+
+On boot, after LCC initialization, the panel sends `IdentifyConsumer` for each
+registered turnout event to learn current positions from turnout decoders on the bus.
+Queries are paced at a configurable interval (default 100ms) to avoid bus congestion.
+
+### Discovery Mode
+
+When enabled via the Add Turnout tab, the panel captures all EventReport messages
+seen on the bus (regardless of registration) to help users identify event IDs for
+turnouts they want to add.

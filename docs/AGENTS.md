@@ -5,50 +5,31 @@
 | Component | Status | Notes |
 |-----------|--------|-------|
 | Board Drivers | ✓ Complete | CH422G, LCD, Touch, SD all working |
-| LCC/OpenMRN | ✓ Complete | Node init, TWAI, event production, CDI/ACDI |
-| LVGL UI | ✓ Complete | Scene Selector (left) + Manual Control tabs |
-| Scene Manager | ✓ Complete | JSON parse, auto-create default scenes |
-| Fade Controller | ✓ Complete | State machine, interpolation, rate limiting |
+| LCC/OpenMRN | ✓ Complete | Node init, TWAI, event production/consumption, CDI/ACDI |
+| LVGL UI | ✓ Complete | Turnout Switchboard (left) + Add Turnout tabs |
+| Turnout Storage | ✓ Complete | JSON parse/save on SD card |
+| Turnout Manager | ✓ Complete | Thread-safe state management with FreeRTOS mutex |
 | SD Error Screen | ✓ Complete | Displays when SD card missing |
-| Progress Bar | ✓ Complete | LVGL timer updates, auto-hides on completion |
-| Auto-Apply | ✓ Complete | Applies first scene on boot with configurable duration |
-| Color Preview | ✓ Complete | RGBW light mixing preview circles on cards and manual tab |
-| Scene Editing | ✓ Complete | Edit modal with name, RGBW, brightness, reorder |
+| Screen Timeout | ✓ Complete | Backlight power saving with touch-to-wake |
+| Stale Detection | ✓ Complete | Marks turnouts stale after configurable timeout |
 | Firmware Update | ✓ Complete | OTA via LCC Memory Config Protocol, JMRI compatible |
 
-### Recent Changes (Session 2026-01-19)
+### Recent Changes (Session 2026-02-21)
+- Converted from lighting scene controller to turnout control panel
+- Replaced scene_storage with turnout_storage (JSON persistence)
+- Replaced fade_controller with turnout_manager (thread-safe state)
+- Rewrote lcc_node.cpp with TurnoutEventHandler for event consumption
+- Created turnout switchboard UI (color-coded tiles, tap-to-toggle)
+- Created Add Turnout tab (manual entry + discovery mode)
+- Updated CDI config: PanelConfig with screen_timeout, stale_timeout, query_pace
+- Removed: fade_controller, scene_storage, ui_manual, ui_scenes
+- Updated all documentation for turnout panel
+
+### Previous Changes (Session 2026-01-19)
 - Added LCC firmware update support (FR-060 to FR-064)
 - Created `bootloader_hal.cpp` for ESP32 OTA integration
 - Created `bootloader_display.c` for LCD status during firmware updates
 - Updated partition table for dual OTA partitions (ota_0, ota_1)
-- Added `lcc_node_request_bootloader()` for "enter bootloader" command
-- Bootloader shows visual status on LCD (no LEDs on this board)
-- Updated SPEC.md, ARCHITECTURE.md, README.md with firmware update docs
-- Added scene editing functionality (FR-044 to FR-048)
-- Added edit button (pencil icon) to scene cards
-- Created edit scene modal with name input, RGBW sliders, color preview
-- Added scene reorder functionality (Move Left/Right buttons)
-- Added ordinal position display ("1st", "2nd", etc.) in edit modal
-- Added `scene_storage_update()` and `scene_storage_reorder()` APIs
-- Fixed LVGL mutex deadlock: added `scene_storage_reload_ui_no_lock()` for use from LVGL callbacks
-
-- Updated documentation (SPEC.md, ARCHITECTURE.md, README.md)
-
-### Recent Changes (Session 2026-01-18)
-- Fixed SNIP user info display (CDI space 251 with origin 1)
-- Fixed Base Event ID CDI offset (changed from 128 to 132)
-- Implemented fade_controller with linear interpolation
-- Wired UI Apply buttons to fade_controller
-- Added progress bar updates via LVGL timer
-- Added SD card error screen (persists until restart)
-- Updated branding: IvanBuilds / LCC Touchscreen Controller
-- Swapped tab order: Scene Selector now first (leftmost)
-- Improved Scene Selector layout (smaller cards, proper spacing)
-- Fixed progress bar to hide when fade reaches 100%
-- Added auto-apply first scene on boot (LCC configurable)
-- Added color preview circles to Manual Control tab and scene cards
-- Fixed fade controller completion bug (next_param_index stuck at end)
-- Fixed progress bar not hiding on first auto-apply (added fade_started flag)
 
 ---
 
@@ -57,12 +38,12 @@
 | Component | Files | Scope |
 |-----------|-------|-------|
 | Board Drivers | `components/board_drivers/*` | CH422G, LCD, Touch, SD |
-| LCC/OpenMRN | `main/app/lcc_node.*` | Node init, event production, TWAI |
+| LCC/OpenMRN | `main/app/lcc_node.*`, `main/app/lcc_config.hxx` | Node init, event prod/consume, TWAI, CDI |
 | Bootloader HAL | `main/app/bootloader_hal.*` | OTA firmware updates via LCC |
 | Bootloader Display | `main/app/bootloader_display.*` | LCD status during OTA updates |
 | LVGL UI | `main/ui/*` | Screens, widgets, touch handling |
-| Scene Storage | `main/app/scene_storage.*` | JSON parse/save, CRUD operations |
-| Fade Controller | `main/app/fade_controller.*` | Rate limiting, interpolation |
+| Turnout Storage | `main/app/turnout_storage.*` | JSON parse/save on SD card |
+| Turnout Manager | `main/app/turnout_manager.*` | Thread-safe turnout state, stale detection |
 
 ---
 
@@ -70,11 +51,11 @@
 
 - Builds under ESP-IDF v5.1.6 with no errors (warnings acceptable in OpenMRN)
 - Requirement IDs (FR-xxx) referenced in code comments
-- Unit tests added or updated
 - No blocking I/O in UI task
 - LVGL calls protected by mutex when called from non-UI tasks
-- LVGL callbacks must use `_no_lock` variants of functions that modify UI
+- LVGL callbacks use `lv_async_call()` for cross-task UI updates
 - Memory allocations use appropriate heap (PSRAM for large buffers)
+- Turnout state changes propagated via callback (not polling)
 
 ---
 
@@ -95,10 +76,10 @@
 
 | Change Type | Required Updates |
 |-------------|------------------|
-| Event mapping | SPEC.md §3, INTERFACES.md §7 |
+| Event handling | SPEC.md §3, INTERFACES.md §7 |
 | Task model | ARCHITECTURE.md §2 |
 | GPIO assignments | INTERFACES.md, sdkconfig.defaults |
-| Config file format | SPEC.md §4, scene_manager |
+| Config file format | SPEC.md §4-5, turnout_storage |
 | New component | AGENTS.md, CMakeLists.txt |
 
 ---
