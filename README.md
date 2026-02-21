@@ -79,8 +79,8 @@ mounted on a surface near the layout. There is a readme in the `printed_mounts/`
 
 ```bash
 # Clone with submodules
-git clone --recursive https://github.com/vsi5004/LCC-Lighting-Touchscreen.git
-cd LCC-Lighting-Touchscreen
+git clone --recursive https://github.com/vsi5004/LCCControlPanelTouchscreen.git
+cd LCCControlPanelTouchscreen
 
 # Set target
 idf.py set-target esp32s3
@@ -104,14 +104,14 @@ This project is configured for the [ESP-IDF VS Code Extension](https://marketpla
 
 ## Flashing Firmware
 
-Pre-built firmware binaries are available from the [Releases](https://github.com/vsi5004/LCC-Lighting-Touchscreen/releases) page.
+Pre-built firmware binaries are available from the [Releases](https://github.com/vsi5004/LCCControlPanelTouchscreen/releases) page.
 
 ### Quick Flash (Recommended)
 
 Download the merged binary from the latest release and flash to address `0x0`:
 
 ```bash
-esptool.py --chip esp32s3 --port COMX write_flash 0x0 LCCLightingTouchscreen-vX.X.X-XXXXXXX-merged.bin
+esptool.py --chip esp32s3 --port COMX write_flash 0x0 LCCControlPanelTouchscreen-vX.X.X-XXXXXXX-merged.bin
 ```
 
 ### Detailed Instructions
@@ -127,7 +127,7 @@ See **[FLASHING.md](FLASHING.md)** for the full guide.
 
 ## SD Card Setup
 
-The device reads configuration and scenes from the SD card root.
+The device reads configuration and turnout definitions from the SD card root.
 
 ### Quick Start
 
@@ -136,7 +136,7 @@ The `sdcard/` directory in this repository contains template files that you can 
 1. Format your SD card as FAT32
 2. Copy all files from the `sdcard/` folder to the root of your SD card
 3. Edit `nodeid.txt` with your unique LCC node ID (see below)
-4. Optionally customize `scenes.json` with your preferred lighting presets
+4. Optionally pre-populate `turnouts.json` with your turnout definitions
 
 ### File Reference
 
@@ -168,24 +168,24 @@ Binary file automatically created by OpenMRN. Stores LCC configuration data:
 - User Name — Node name shown in LCC tools (e.g., JMRI)
 - User Description — Node description
 
-**Startup Behavior**
-- Auto-Apply First Scene on Boot — Enable (1) or disable (0)
-- Auto-Apply Transition Duration — Fade time in seconds (0-300)
+**Panel Configuration**
 - Screen Backlight Timeout — Seconds before screen sleeps (0 = disabled, 10-3600)
-
-**Lighting Configuration**
-- Base Event ID — 8-byte event ID base for lighting commands
+- Stale Timeout — Seconds before a turnout with no updates is marked stale (0 = disabled)
+- Query Pace — Milliseconds between event queries at startup
 
 All settings are configurable via any LCC configuration tool (JMRI, etc.).
 
-#### `scenes.json`
+#### `turnouts.json`
 
 ```json
 {
   "version": 1,
-  "scenes": [
-    { "name": "sunrise", "brightness": 180, "r": 255, "g": 120, "b": 40, "w": 0 },
-    { "name": "night",   "brightness": 30,  "r": 10,  "g": 10,  "b": 40, "w": 0 }
+  "turnouts": [
+    {
+      "name": "Main Yard Lead",
+      "event_normal": "05.01.01.01.40.00.00.00",
+      "event_reverse": "05.01.01.01.40.00.00.01"
+    }
   ]
 }
 ```
@@ -196,44 +196,26 @@ Custom 800 x 480 px boot splash image (decoded via esp_jpeg). Cannot be saved as
 
 ## LCC Event Model
 
-Events are transmitted to control downstream RGBW lighting nodes using a 
-**Duration-Triggered Fade Protocol**. The touchscreen sends target values and 
-transition duration; LED controllers perform local high-fidelity fading at ~60fps.
+Each turnout is defined by a pair of LCC event IDs:
 
-### Event ID Format
-
-```
-05.01.01.01.9F.60.0X.VV
-                  │  └── Value (0-255)
-                  └───── Parameter
-```
-
-| Parameter | X | Description |
-|-----------|---|-------------|
-| Red | 0 | Red channel target intensity |
-| Green | 1 | Green channel target intensity |
-| Blue | 2 | Blue channel target intensity |
-| White | 3 | White channel target intensity |
-| Brightness | 4 | Master brightness target |
-| Duration | 5 | Fade time in seconds (0=instant) |
+| Event | Meaning |
+|-------|----------|
+| Normal Event | Sent/consumed when turnout is in Normal (closed) position |
+| Reverse Event | Sent/consumed when turnout is in Reverse (thrown) position |
 
 ### How It Works
 
-1. **Touchscreen sends 6 events**: R, G, B, W, Brightness, Duration
-2. **LED controllers store** R, G, B, W, Brightness as pending values
-3. **Duration event triggers** the fade from current to pending values
-4. **Local interpolation** runs at ~60fps on LED controllers
-5. **Minimal bus traffic**: Only 6 events per scene change
+1. **Tap a turnout tile** on the touchscreen to toggle its state
+2. **Panel sends the target event** (Normal or Reverse) to the LCC bus
+3. **Turnout decoders** on the bus receive the event and move the turnout
+4. **State feedback** — the panel consumes `ProducerIdentified` and `EventReport` messages to update tile colors
+5. **Startup query** — on boot, the panel sends `IdentifyConsumer` for each registered event to learn current states
 
-### Long Fades (>255 seconds)
+### Stale Detection
 
-For fades exceeding 255 seconds:
-- Total duration is divided into equal segments (each ≤255s)
-- Intermediate target colors are calculated proportionally
-- Example: 5-minute fade = 2 segments of 150s each
-
-This architecture provides smooth, high-fidelity lighting transitions while 
-minimizing LCC bus traffic and freeing the touchscreen for UI interaction.
+If a turnout has not received a state update within the configurable stale timeout,
+its tile turns red to alert the operator. This helps identify turnouts that may
+have lost communication or power.
 
 ## LCC Configuration (CDI)
 
@@ -245,66 +227,30 @@ The following settings can be configured via any LCC configuration tool (JMRI, e
 | User Name | Node name displayed in LCC tools |
 | User Description | Node description displayed in LCC tools |
 
-### Startup Behavior
+### Panel Configuration
 | Setting | Default | Range | Description |
 |---------|---------|-------|--------------|
-| Auto-Apply First Scene on Boot | 1 (enabled) | 0-1 | Apply first scene after startup |
-| Auto-Apply Transition Duration | 10 seconds | 0-300s | Fade duration for auto-apply |
 | Screen Backlight Timeout | 60 seconds | 0, 10-3600s | Idle timeout before screen off (0=disabled) |
-
-### Lighting Configuration
-| Setting | Default | Description |
-|---------|---------|-------------|
-| Base Event ID | 05.01.01.01.9F.60.00.00 | Base for lighting event IDs |
+| Stale Timeout | 300 seconds | 0-65535s | Time without update before turnout marked stale (0=disabled) |
+| Query Pace | 100 ms | 10-5000ms | Delay between event queries at startup |
 
 ## User Interface
 
-### Scene Selector Tab (Default)
-![Scene selector photo](./docs/img/scene_select_photo.jpg)
-- Horizontal swipeable card carousel
-- Color preview circle on each card showing approximate light output
-- Center-snapping scroll behavior with blue selection highlight
-- Transition duration slider (0–300 seconds)
-- Apply Button performs smooth linear fade to selected scene
-- Progress bar shows fade completion (auto-hides when done)
-- Edit button on each card opens edit modal
-- Delete button on each card (with confirmation modal)
+### Turnouts Tab (Default)
 
-### Scene Edit Modal
+- Color-coded switchboard grid showing all registered turnouts
+- **Green** = Normal (closed), **Yellow** = Reverse (thrown), **Grey** = Unknown, **Red** = Stale
+- **Blue border** indicates a command is pending (waiting for feedback)
+- Tap any tile to toggle the turnout between Normal and Reverse
+- Tiles are arranged in a responsive flex-wrap layout (150×80px tiles)
+- Automatically refreshes when turnouts are added or removed
 
-Tap the edit button (✏️) on any scene card to open the edit modal:
-![Scene edit photo](./docs/img/scene_edit_photo.jpg)
-- **Scene name** text input with on-screen keyboard
-- **RGBW + Brightness sliders** (0-255 each) with real-time preview
-- **Color preview circle** updates as you adjust values
-- **Move Left/Right buttons** to reorder scenes in the carousel
-- **Preview button** sends current slider values to lighting for live testing
-- **Save** applies changes to SD card, **Cancel** discards
+### Add Turnout Tab
 
-### Manual Control Tab
-![Manual control photo](./docs/img/manual_control_photo.jpg)
-- Five sliders: Brightness, Red, Green, Blue, White
-- **Color preview circle** showing approximate light output from current settings
-- **Apply** button sends current values immediately to LCC bus
-- **Save Scene** opens dialog to save current settings
-
-### Color Preview Algorithm
-
-The color preview circles approximate the visual output of RGBW LEDs:
-
-- **Additive color mixing**: RGB channels combine as light (R+G=Yellow, etc.)
-- **White channel**: Blends color towards white (max 80% at W=255) while preserving hue
-- **Brightness**: Acts as intensity using gamma 0.5 curve for perceptual accuracy
-
-### Auto-Apply on Boot
-
-When enabled (default), the device automatically applies the first scene in the
-scene list after startup with a configurable fade duration. This allows lights
-to smoothly turn on when the layout powers up.
-
-- Configurable via LCC tools (JMRI, etc.)
-- Default: Enabled with 10-second transition
-- Assumes initial state is all channels at 0 (lights off)
+- **Manual Entry**: Enter turnout name and Normal/Reverse event IDs in dotted-hex format
+- **Discovery Mode**: Toggle to listen for events on the LCC bus and select from discovered events
+- On-screen keyboard for text input
+- Turnouts are saved to SD card immediately after adding
 
 ### Power Saving (Screen Timeout)
 
@@ -331,7 +277,7 @@ Protocol. This allows firmware updates through JMRI without physical access to t
 1. Connect JMRI to your LCC network
 2. Open **LCC Menu → Firmware Update**
 3. Select the touchscreen controller by Node ID
-4. Choose the firmware file (`build/LCCLightingTouchscreen.bin`)
+4. Choose the firmware file (`build/LCCControlPanelTouchscreen.bin`)
 5. Click "Download" — device reboots automatically when complete
 
 **Safety Features:**
@@ -357,8 +303,7 @@ Protocol. This allows firmware updates through JMRI without physical access to t
 |------|----------|------|--------------|
 | lvgl_task | 2 | CPU1 | LVGL rendering via `lv_timer_handler()` |
 | openmrn_task | 5 | Any | OpenMRN executor loop |
-| lighting_task | 4 | Any | Fade controller tick (10ms interval) |
-| main_task | 1 | CPU1 | Hardware init, app orchestration |
+| main_task | 1 | CPU1 | Hardware init, app orchestration, stale checking |
 
 CPU0 is dedicated to RGB LCD DMA interrupt handling for smooth display updates.
 
