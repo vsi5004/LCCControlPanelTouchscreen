@@ -1,12 +1,9 @@
 /**
  * @file main.c
- * @brief LCC Lighting Scene Controller - Main Entry Point
+ * @brief LCC Turnout Control Panel - Main Entry Point
  * 
- * This application implements an ESP32-S3 based LCC lighting scene controller
+ * This application implements an ESP32-S3 based LCC turnout control panel
  * with a touch LCD user interface for the Waveshare ESP32-S3 Touch LCD 4.3B.
- * 
- * @see docs/SPEC.md for functional requirements
- * @see docs/ARCHITECTURE.md for system design
  */
 
 #include <stdio.h>
@@ -32,13 +29,12 @@
 #include "ui_common.h"
 
 // App modules
-#include "app/scene_storage.h"
+#include "app/turnout_manager.h"
 #include "app/lcc_node.h"
-#include "app/fade_controller.h"
 #include "app/screen_timeout.h"
 #include "app/bootloader_hal.h"
 
-// For reset reason detection (FR-060)
+// For reset reason detection
 #if defined(CONFIG_IDF_TARGET_ESP32S3)
 #include "esp32s3/rom/rtc.h"
 #elif defined(CONFIG_IDF_TARGET_ESP32)
@@ -170,57 +166,45 @@ static esp_err_t init_hardware(void)
 }
 
 /**
- * @brief Check for scenes.json and create if it doesn't exist
+ * @brief Async LVGL callback for turnout tile update
  */
-static void ensure_scenes_json_exists(void)
+static void ui_turnouts_update_tile_async(void *param)
 {
-    const char *scenes_path = "/sdcard/scenes.json";
+    uint32_t packed = (uint32_t)(uintptr_t)param;
+    int index = (int)(packed >> 8);
+    turnout_state_t state = (turnout_state_t)(packed & 0xFF);
     
-    // Check if file exists
-    struct stat st;
-    if (stat(scenes_path, &st) == 0) {
-        ESP_LOGI(TAG, "scenes.json found (%ld bytes)", st.st_size);
-        return;
-    }
+    ui_turnouts_update_tile(index, state);
+}
+
+/**
+ * @brief LCC state update callback — called by turnout_manager when state changes
+ * 
+ * This runs from the LCC executor thread context. We use lv_async_call
+ * to safely update the LVGL UI from the LVGL task.
+ */
+static void turnout_state_changed_cb(int index, turnout_state_t new_state)
+{
+    // We need to pass both index and state. Pack into a single uint32.
+    uint32_t packed = ((uint32_t)index << 8) | (uint32_t)new_state;
     
-    ESP_LOGI(TAG, "scenes.json not found, creating default file...");
+    // Schedule UI update via LVGL async call (thread-safe)
+    lv_async_call((lv_async_cb_t)ui_turnouts_update_tile_async, (void*)(uintptr_t)packed);
+}
+
+/**
+ * @brief Register all stored turnout events with the LCC node for consumption
+ */
+static void register_all_turnout_events(void)
+{
+    size_t count = turnout_manager_get_count();
+    ESP_LOGI(TAG, "Registering %d turnout event pairs with LCC node", (int)count);
     
-    // Create a default scenes.json with example scenes
-    const char *default_scenes = 
-        "{\n"
-        "  \"scenes\": [\n"
-        "    {\n"
-        "      \"name\": \"Example Scene 1\",\n"
-        "      \"brightness\": 100,\n"
-        "      \"r\": 255,\n"
-        "      \"g\": 200,\n"
-        "      \"b\": 150,\n"
-        "      \"w\": 0\n"
-        "    },\n"
-        "    {\n"
-        "      \"name\": \"Example Scene 2\",\n"
-        "      \"brightness\": 75,\n"
-        "      \"r\": 100,\n"
-        "      \"g\": 150,\n"
-        "      \"b\": 255,\n"
-        "      \"w\": 50\n"
-        "    }\n"
-        "  ]\n"
-        "}\n";
-    
-    FILE *file = fopen(scenes_path, "w");
-    if (!file) {
-        ESP_LOGE(TAG, "Failed to create scenes.json");
-        return;
-    }
-    
-    size_t written = fwrite(default_scenes, 1, strlen(default_scenes), file);
-    fclose(file);
-    
-    if (written == strlen(default_scenes)) {
-        ESP_LOGI(TAG, "Created scenes.json with %d bytes", written);
-    } else {
-        ESP_LOGE(TAG, "Failed to write complete scenes.json");
+    for (size_t i = 0; i < count; i++) {
+        turnout_t t;
+        if (turnout_manager_get_by_index(i, &t) == ESP_OK) {
+            lcc_node_register_turnout_events(t.event_normal, t.event_reverse);
+        }
     }
 }
 
@@ -388,39 +372,6 @@ static esp_err_t load_and_display_image(esp_lcd_panel_handle_t panel, const char
     return ESP_OK;
 }
 
-// ============================================================================
-// Lighting Task
-// ============================================================================
-
-/// Lighting task handle
-static TaskHandle_t s_lighting_task = NULL;
-
-/// Lighting task tick interval (ms) - 10ms for smooth fade interpolation
-#define LIGHTING_TASK_INTERVAL_MS  10
-
-/**
- * @brief Lighting control task
- * 
- * Runs the fade controller state machine and handles LCC event transmission.
- * Tick interval of 10ms combined with burst transmission of all 5 parameters
- * provides smooth fades (100 steps per second, ~2.5 value change per step
- * for a 10-second 0→255 fade).
- */
-static void lighting_task(void *arg)
-{
-    ESP_LOGI(TAG, "Lighting task started");
-    
-    TickType_t last_wake = xTaskGetTickCount();
-    
-    while (1) {
-        // Process fade controller
-        fade_controller_tick();
-        
-        // Fixed delay for consistent timing
-        vTaskDelayUntil(&last_wake, pdMS_TO_TICKS(LIGHTING_TASK_INTERVAL_MS));
-    }
-}
-
 /**
  * @brief Show SD card missing error screen
  * 
@@ -473,7 +424,7 @@ static void show_sd_card_error_screen(void)
         "configuration files and restart the device.\n\n"
         "Required files:\n"
         "  - nodeid.txt (LCC node ID)\n"
-        "  - scenes.json (lighting scenes)");
+        "  - turnouts.json (turnout definitions)");
     lv_obj_set_style_text_font(instructions, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_set_style_text_color(instructions, lv_color_hex(0xB0B0B0), LV_PART_MAIN);  // Light gray
     lv_obj_set_style_text_align(instructions, LV_TEXT_ALIGN_CENTER, LV_PART_MAIN);
@@ -500,7 +451,7 @@ void app_main(void)
     // First log - if this doesn't show, app isn't starting
     printf("=== APP_MAIN STARTING ===\n");
     
-    ESP_LOGI(TAG, "LCC Lighting Scene Controller starting...");
+    ESP_LOGI(TAG, "LCC Turnout Control Panel starting...");
     ESP_LOGI(TAG, "ESP-IDF version: %s", esp_get_idf_version());
     ESP_LOGI(TAG, "Free heap at start: %lu bytes", esp_get_free_heap_size());
 
@@ -593,8 +544,18 @@ void app_main(void)
         // This function never returns
     }
 
-    // Ensure scenes.json exists (create default if not)
-    ensure_scenes_json_exists();
+    // Initialize turnout manager (loads turnouts.json from SD card)
+    ESP_LOGI(TAG, "Initializing turnout manager...");
+    ret = turnout_manager_init();
+    if (ret != ESP_OK) {
+        ESP_LOGW(TAG, "Turnout manager init failed: %s", esp_err_to_name(ret));
+    } else {
+        ESP_LOGI(TAG, "Turnout manager initialized: %d turnouts loaded",
+                 (int)turnout_manager_get_count());
+    }
+    
+    // Set state change callback for UI updates
+    turnout_manager_set_state_callback(turnout_state_changed_cb);
     
     // Display splash image from SD card (FAT uses 8.3 filenames)
     ret = load_and_display_image(s_lcd_panel, "/sdcard/SPLASH.JPG");
@@ -602,22 +563,22 @@ void app_main(void)
         ESP_LOGW(TAG, "No splash image found, continuing without splash");
     }
 
-    // Show splash for specified duration (FR-001: within 1500ms)
+    // Show splash for specified duration
     vTaskDelay(pdMS_TO_TICKS(3000));
 
-    // Initialize LCC/OpenMRN (FR-002)
-    // This reads node ID from /sdcard/nodeid.txt and initializes TWAI
+    // Initialize LCC/OpenMRN
     ESP_LOGI(TAG, "Initializing LCC/OpenMRN...");
     lcc_config_t lcc_cfg = LCC_CONFIG_DEFAULT();
     ret = lcc_node_init(&lcc_cfg);
     if (ret != ESP_OK) {
         ESP_LOGW(TAG, "LCC initialization failed: %s - continuing without LCC", 
                  esp_err_to_name(ret));
-        // Continue without LCC - device can still function as standalone UI
     } else {
-        ESP_LOGI(TAG, "LCC node initialized - Node ID: %012llX, Base Event: %016llX",
-                 (unsigned long long)lcc_node_get_node_id(),
-                 (unsigned long long)lcc_node_get_base_event_id());
+        ESP_LOGI(TAG, "LCC node initialized - Node ID: %012llX",
+                 (unsigned long long)lcc_node_get_node_id());
+        
+        // Register all stored turnout events for consumption
+        register_all_turnout_events();
     }
 
     // Initialize screen timeout module (power saving)
@@ -635,32 +596,6 @@ void app_main(void)
                  screen_timeout_cfg.timeout_sec);
     }
 
-    // Initialize fade controller
-    ESP_LOGI(TAG, "Initializing fade controller...");
-    ret = fade_controller_init();
-    if (ret != ESP_OK) {
-        ESP_LOGW(TAG, "Fade controller init failed: %s", esp_err_to_name(ret));
-    } else {
-        ESP_LOGI(TAG, "Fade controller initialized");
-    }
-
-    // Create lighting task to run fade controller
-    ESP_LOGI(TAG, "Starting lighting task...");
-    BaseType_t task_ret = xTaskCreatePinnedToCore(
-        lighting_task,
-        "lighting",
-        4096,           // Stack size (per ARCHITECTURE.md)
-        NULL,
-        4,              // Priority 4 (per ARCHITECTURE.md)
-        &s_lighting_task,
-        tskNO_AFFINITY  // Run on any core
-    );
-    if (task_ret != pdPASS) {
-        ESP_LOGE(TAG, "Failed to create lighting task");
-    } else {
-        ESP_LOGI(TAG, "Lighting task started");
-    }
-
     // Initialize LVGL
     ESP_LOGI(TAG, "Initializing LVGL...");
     lv_disp_t *disp = NULL;
@@ -675,80 +610,44 @@ void app_main(void)
     }
     ESP_LOGI(TAG, "LVGL initialized successfully");
 
-    // Show main UI (FR-010)
+    // Show main UI
     ESP_LOGI(TAG, "Showing main UI...");
     ui_show_main();
     ESP_LOGI(TAG, "Main UI displayed");
 
-    // Load scenes from SD card and populate Scene Selector tab
-    ESP_LOGI(TAG, "Loading scenes from SD card...");
-    scene_storage_reload_ui();
-    ESP_LOGI(TAG, "Scenes loaded");
-
-    // Auto-apply first scene on boot if enabled
-    if (lcc_node_get_auto_apply_enabled()) {
-        ui_scene_t first_scene;
-        if (scene_storage_get_first(&first_scene) == ESP_OK) {
-            uint16_t duration_sec = lcc_node_get_auto_apply_duration_sec();
-            ESP_LOGI(TAG, "Auto-applying first scene '%s' over %u seconds",
-                     first_scene.name, duration_sec);
-            
-            // Set initial state to all zeros (assume lights are off at boot)
-            lighting_state_t initial_state = {
-                .brightness = 0,
-                .red = 0,
-                .green = 0,
-                .blue = 0,
-                .white = 0
-            };
-            fade_controller_set_current(&initial_state);
-            
-            // Start fade to first scene
-            fade_params_t params = {
-                .target = {
-                    .brightness = first_scene.brightness,
-                    .red = first_scene.red,
-                    .green = first_scene.green,
-                    .blue = first_scene.blue,
-                    .white = first_scene.white
-                },
-                .duration_ms = (uint32_t)duration_sec * 1000
-            };
-            
-            esp_err_t fade_ret = fade_controller_start(&params);
-            if (fade_ret != ESP_OK) {
-                ESP_LOGW(TAG, "Failed to start auto-apply fade: %s", esp_err_to_name(fade_ret));
-            } else {
-                // Start progress bar tracking (only if duration > 0)
-                if (duration_sec > 0) {
-                    ui_lock();
-                    ui_scenes_start_progress_tracking();
-                    ui_unlock();
-                }
-            }
-        } else {
-            ESP_LOGI(TAG, "No scenes available for auto-apply");
-        }
-    } else {
-        ESP_LOGI(TAG, "Auto-apply first scene is disabled");
+    // Query all turnout states from the bus (paced to avoid flooding)
+    if (lcc_node_get_status() == LCC_STATUS_RUNNING) {
+        ESP_LOGI(TAG, "Querying turnout states from LCC bus...");
+        lcc_node_query_all_turnout_states();
     }
 
     ESP_LOGI(TAG, "Initialization complete - entering main loop");
 
-    // Main loop: Run screen timeout tick and report status periodically
+    // Main loop: screen timeout + stale state checking + status reporting
     TickType_t last_status_tick = xTaskGetTickCount();
+    TickType_t last_stale_tick = xTaskGetTickCount();
     while (1) {
         // Tick screen timeout every 500ms
         screen_timeout_tick();
         vTaskDelay(pdMS_TO_TICKS(500));
         
-        // Report status every 10 seconds
-        if ((xTaskGetTickCount() - last_status_tick) >= pdMS_TO_TICKS(10000)) {
+        // Check for stale turnouts every 5 seconds
+        if ((xTaskGetTickCount() - last_stale_tick) >= pdMS_TO_TICKS(5000)) {
+            last_stale_tick = xTaskGetTickCount();
+            uint16_t stale_sec = lcc_node_get_stale_timeout_sec();
+            if (stale_sec > 0) {
+                turnout_manager_check_stale((uint32_t)stale_sec * 1000);
+            }
+        }
+        
+        // Report status every 30 seconds
+        if ((xTaskGetTickCount() - last_status_tick) >= pdMS_TO_TICKS(30000)) {
             last_status_tick = xTaskGetTickCount();
-            ESP_LOGI(TAG, "Status - Free heap: %lu bytes, LCC: %s, Screen: %s", 
+            ESP_LOGI(TAG, "Status - Free heap: %lu bytes, LCC: %s, Screen: %s, Turnouts: %d", 
                      esp_get_free_heap_size(),
                      lcc_node_get_status() == LCC_STATUS_RUNNING ? "running" : "not running",
-                     screen_timeout_is_screen_on() ? "on" : "off");
+                     screen_timeout_is_screen_on() ? "on" : "off",
+                     (int)turnout_manager_get_count());
         }
     }
 }

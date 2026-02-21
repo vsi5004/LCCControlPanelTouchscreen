@@ -1,12 +1,10 @@
 /**
  * @file lcc_config.hxx
- * @brief LCC/OpenMRN CDI Configuration Definition
+ * @brief LCC/OpenMRN CDI Configuration Definition for Turnout Panel
  * 
  * Defines the Configuration Description Information (CDI) for this node.
- * The base_event_id is configurable via LCC memory configuration protocol.
- * 
- * @see docs/SPEC.md §3 for LCC Event Model
- * @see docs/ARCHITECTURE.md §5 for OpenMRN Integration
+ * The turnout panel configuration includes screen timeout and stale timeout
+ * settings configurable via the LCC memory configuration protocol.
  */
 
 #ifndef LCC_CONFIG_HXX_
@@ -19,39 +17,20 @@ namespace openlcb
 {
 
 /// Configuration version. Increment when making incompatible changes.
-/// v0x0003: Added Startup Behavior settings to CDI XML (was missing from UI)
-static constexpr uint16_t CANONICAL_VERSION = 0x0003;
-
-/// Default base event ID: 05.01.01.01.22.60.00.00
-static constexpr uint64_t DEFAULT_BASE_EVENT_ID = 0x0501010122600000ULL;
-
-/// Default auto-apply duration in seconds
-static constexpr uint16_t DEFAULT_AUTO_APPLY_DURATION_SEC = 10;
+/// v0x0100: Turnout panel — replaces lighting controller config
+static constexpr uint16_t CANONICAL_VERSION = 0x0100;
 
 /// Default screen timeout in seconds (0 = disabled)
 static constexpr uint16_t DEFAULT_SCREEN_TIMEOUT_SEC = 60;
 
-/// CDI segment for startup behavior settings
-CDI_GROUP(StartupConfig);
+/// Default stale timeout in seconds (0 = disabled)
+static constexpr uint16_t DEFAULT_STALE_TIMEOUT_SEC = 300;
 
-/// Enable auto-apply of first scene on boot
-CDI_GROUP_ENTRY(auto_apply_enabled, Uint8ConfigEntry,
-    Name("Auto-Apply First Scene on Boot"),
-    Description("When enabled (1), automatically applies the first scene in the "
-                "scene list after startup. Assumes initial state is all LEDs off. "
-                "Set to 0 to disable."),
-    Default(1),
-    Min(0),
-    Max(1));
+/// Default query pace in milliseconds between state queries
+static constexpr uint16_t DEFAULT_QUERY_PACE_MS = 100;
 
-/// Auto-apply transition duration in seconds
-CDI_GROUP_ENTRY(auto_apply_duration_sec, Uint16ConfigEntry,
-    Name("Auto-Apply Transition Duration (seconds)"),
-    Description("Duration in seconds for the automatic scene transition at startup. "
-                "Range: 0-300 seconds. Default: 10 seconds."),
-    Default(DEFAULT_AUTO_APPLY_DURATION_SEC),
-    Min(0),
-    Max(300));
+/// CDI segment for panel behavior settings
+CDI_GROUP(PanelConfig);
 
 /// Screen timeout for power saving
 CDI_GROUP_ENTRY(screen_timeout_sec, Uint16ConfigEntry,
@@ -63,17 +42,25 @@ CDI_GROUP_ENTRY(screen_timeout_sec, Uint16ConfigEntry,
     Min(0),
     Max(3600));
 
-CDI_GROUP_END();
+/// Stale timeout — mark turnouts as stale if no state update received
+CDI_GROUP_ENTRY(stale_timeout_sec, Uint16ConfigEntry,
+    Name("Stale Timeout (seconds)"),
+    Description("Time in seconds before a turnout is marked STALE if no state "
+                "update is received. Set to 0 to disable stale detection. "
+                "Default: 300 seconds (5 minutes)."),
+    Default(DEFAULT_STALE_TIMEOUT_SEC),
+    Min(0),
+    Max(3600));
 
-/// CDI segment for lighting controller settings
-CDI_GROUP(LightingConfig);
-
-/// Base Event ID for lighting commands
-/// Format: 05.01.01.01.22.60.0x.00 where x selects the parameter
-CDI_GROUP_ENTRY(base_event_id, EventConfigEntry,
-    Name("Base Event ID"),
-    Description("Base event ID for lighting commands. The last two bytes "
-                "encode parameter type and value. Default: 05.01.01.01.22.60.00.00"));
+/// Query pace — minimum interval between turnout state queries
+CDI_GROUP_ENTRY(query_pace_ms, Uint16ConfigEntry,
+    Name("Query Pace (milliseconds)"),
+    Description("Minimum interval in milliseconds between turnout state queries "
+                "during refresh. Lower values are faster but generate more bus traffic. "
+                "Range: 20-1000 ms. Default: 100 ms."),
+    Default(DEFAULT_QUERY_PACE_MS),
+    Min(20),
+    Max(1000));
 
 CDI_GROUP_END();
 
@@ -84,11 +71,8 @@ CDI_GROUP(LccConfigSegment, Segment(MemoryConfigDefs::SPACE_CONFIG), Offset(128)
 /// Internal configuration data (version info for factory reset)
 CDI_GROUP_ENTRY(internal_config, InternalConfigData);
 
-/// Startup configuration
-CDI_GROUP_ENTRY(startup, StartupConfig, Name("Startup Behavior"));
-
-/// Lighting configuration
-CDI_GROUP_ENTRY(lighting, LightingConfig, Name("Lighting Configuration"));
+/// Panel configuration
+CDI_GROUP_ENTRY(panel, PanelConfig, Name("Panel Configuration"));
 
 CDI_GROUP_END();
 

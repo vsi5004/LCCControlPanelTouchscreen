@@ -1,6 +1,6 @@
 /**
  * @file ui_common.h
- * @brief Common UI definitions and initialization
+ * @brief Common UI definitions and initialization for LCC Turnout Panel
  */
 
 #pragma once
@@ -9,6 +9,7 @@
 #include "esp_err.h"
 #include <stdint.h>
 #include <stddef.h>
+#include <stdbool.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,22 +25,41 @@ extern "C" {
 #define UI_LVGL_TASK_MIN_DELAY_MS   CONFIG_LVGL_TASK_MIN_DELAY_MS
 
 /**
- * @brief Scene structure for scene selector
+ * @brief Maximum number of turnouts the panel can manage
+ */
+#define TURNOUT_MAX_COUNT   150
+
+/**
+ * @brief Turnout state enumeration
+ */
+typedef enum {
+    TURNOUT_STATE_UNKNOWN = 0,  ///< State not yet known
+    TURNOUT_STATE_NORMAL,       ///< Turnout is in NORMAL (closed) position
+    TURNOUT_STATE_REVERSE,      ///< Turnout is in REVERSE (thrown) position
+    TURNOUT_STATE_STALE,        ///< No state update received within timeout
+} turnout_state_t;
+
+/**
+ * @brief Turnout definition structure
+ * 
+ * Represents a single turnout on the layout. Each turnout is identified
+ * by a pair of LCC event IDs: one for NORMAL and one for REVERSE.
  */
 typedef struct {
-    char name[32];      ///< Scene name
-    uint8_t brightness; ///< Brightness value (0-255)
-    uint8_t red;        ///< Red value (0-255)
-    uint8_t green;      ///< Green value (0-255)
-    uint8_t blue;       ///< Blue value (0-255)
-    uint8_t white;      ///< White value (0-255)
-} ui_scene_t;
+    char name[32];              ///< User-assigned name
+    uint64_t event_normal;      ///< LCC event ID for NORMAL/CLOSED command
+    uint64_t event_reverse;     ///< LCC event ID for REVERSE/THROWN command
+    turnout_state_t state;      ///< Current known state
+    int64_t last_update_us;     ///< Timestamp of last state update (esp_timer_get_time)
+    bool command_pending;       ///< True when a command has been sent, awaiting confirmation
+    uint16_t user_order;        ///< User-assigned display order
+} turnout_t;
 
 /**
  * @brief Initialize LVGL with LCD and touch
  * 
- * @param lcd_panel LCD panel handle from board driver
- * @param touch Touch controller handle from board driver
+ * @param disp Output display handle
+ * @param touch_indev Output touch input device handle
  * @return esp_err_t ESP_OK on success
  */
 esp_err_t ui_init(lv_disp_t **disp, lv_indev_t **touch_indev);
@@ -52,14 +72,13 @@ esp_err_t ui_init(lv_disp_t **disp, lv_indev_t **touch_indev);
 void ui_show_splash(lv_disp_t *disp);
 
 /**
- * @brief Show main UI (tabs with Manual and Scenes)
+ * @brief Show main UI (tabs with Turnouts and Add Turnout)
  */
 void ui_show_main(void);
 
 /**
  * @brief Lock LVGL mutex (for non-UI task access)
  * 
- * @param timeout_ms Timeout in milliseconds (default: portMAX_DELAY)
  * @return true if locked successfully
  */
 bool ui_lock(void);
@@ -77,90 +96,66 @@ void ui_unlock(void);
 void ui_create_main_screen(void);
 
 /**
- * @brief Get the manual control tab object
+ * @brief Get the turnouts tab object
  */
-lv_obj_t* ui_get_manual_tab(void);
+lv_obj_t* ui_get_turnouts_tab(void);
 
 /**
- * @brief Get the scene selector tab object
+ * @brief Get the add turnout tab object
  */
-lv_obj_t* ui_get_scenes_tab(void);
+lv_obj_t* ui_get_add_turnout_tab(void);
 
-// ----- Manual Control Tab Functions -----
+// ----- Turnout Switchboard Tab Functions -----
 
 /**
- * @brief Create the manual control tab content (FR-020)
+ * @brief Create the turnout switchboard tab content
  */
-void ui_create_manual_tab(lv_obj_t *parent);
+void ui_create_turnouts_tab(lv_obj_t *parent);
 
 /**
- * @brief Get current manual control values
- */
-void ui_manual_get_values(uint8_t *brightness, uint8_t *red, uint8_t *green, 
-                          uint8_t *blue, uint8_t *white);
-
-/**
- * @brief Set manual control values (updates sliders)
- */
-void ui_manual_set_values(uint8_t brightness, uint8_t red, uint8_t green, 
-                          uint8_t blue, uint8_t white);
-
-/**
- * @brief Calculate display RGB from RGBW + brightness (additive light mixing)
+ * @brief Refresh all turnout tiles from the turnout manager data
  * 
- * For RGBW LEDs:
- * - RGB channels mix additively (R+G=Yellow, R+B=Magenta, G+B=Cyan)
- * - White LED adds equally to all RGB channels
- * - Brightness is a master dimmer applied to all
+ * Rebuilds the tile grid. Call after adding/removing turnouts.
+ */
+void ui_turnouts_refresh(void);
+
+/**
+ * @brief Update a single turnout tile's visual state
  * 
- * @param brightness Master brightness (0-255)
- * @param r Red channel (0-255)
- * @param g Green channel (0-255)
- * @param b Blue channel (0-255)
- * @param w White channel (0-255)
- * @return lv_color_t Display color for preview
- */
-lv_color_t ui_calculate_preview_color(uint8_t brightness, uint8_t r, uint8_t g, uint8_t b, uint8_t w);
-
-// ----- Scene Selector Tab Functions -----
-
-/**
- * @brief Create the scene selector tab content (FR-040)
- */
-void ui_create_scenes_tab(lv_obj_t *parent);
-
-/**
- * @brief Load scenes from SD card and populate the list (FR-040)
+ * Lightweight update — changes color/status indicator without rebuilding.
+ * Safe to call from LVGL async context.
  * 
- * @param scenes Array of scene structs
- * @param count Number of scenes
+ * @param index Turnout index in the manager array
+ * @param state New state to display
  */
-void ui_scenes_load_from_sd(const ui_scene_t *scenes, size_t count);
+void ui_turnouts_update_tile(int index, turnout_state_t state);
 
 /**
- * @brief Update transition progress bar (FR-043)
+ * @brief Clear the command-pending indicator on a turnout tile
  * 
- * @param percent Progress percentage (0-100)
+ * @param index Turnout index
  */
-void ui_scenes_update_progress(uint8_t percent);
+void ui_turnouts_clear_pending(int index);
+
+// ----- Add Turnout Tab Functions -----
 
 /**
- * @brief Start the progress bar tracking for a fade in progress
+ * @brief Create the add turnout tab content
+ */
+void ui_create_add_turnout_tab(lv_obj_t *parent);
+
+/**
+ * @brief Add a discovered turnout to the discovery list UI
  * 
- * Shows the progress bar and starts a timer to update it
- * based on the fade controller's progress.
+ * @param event_id The event ID that was discovered
+ * @param state The state indicated by the producer
  */
-void ui_scenes_start_progress_tracking(void);
+void ui_add_turnout_discovery_event(uint64_t event_id, turnout_state_t state);
 
 /**
- * @brief Get current selected scene index
+ * @brief Clear the discovery list
  */
-int ui_scenes_get_selected_index(void);
-
-/**
- * @brief Get current transition duration
- */
-uint16_t ui_scenes_get_duration_sec(void);
+void ui_add_turnout_clear_discoveries(void);
 
 #ifdef __cplusplus
 }

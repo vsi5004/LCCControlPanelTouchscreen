@@ -1,12 +1,10 @@
 /**
  * @file lcc_node.h
- * @brief LCC/OpenMRN Node Interface (C-compatible header)
+ * @brief LCC/OpenMRN Node Interface for Turnout Panel (C-compatible header)
  * 
  * Provides the C interface for OpenMRN/LCC node initialization and operations.
- * The implementation is in C++ but this header can be included from C code.
- * 
- * @see docs/ARCHITECTURE.md §5 for OpenMRN Integration
- * @see docs/SPEC.md FR-002 for initialization requirements
+ * The panel acts as both an event producer (sending turnout commands) and an
+ * event consumer (listening for turnout state feedback).
  */
 
 #ifndef LCC_NODE_H_
@@ -22,9 +20,6 @@ extern "C" {
 
 /**
  * @brief Default LCC node ID if nodeid.txt is not present
- * 
- * Format: 05.01.01.01.9F.60.00
- * This should be unique per device in production.
  */
 #define LCC_DEFAULT_NODE_ID 0x050101019F6000ULL
 
@@ -71,8 +66,6 @@ esp_err_t lcc_node_init(const lcc_config_t *config);
 
 /**
  * @brief Get the current LCC node status
- * 
- * @return Current status of the LCC node
  */
 lcc_status_t lcc_node_get_status(void);
 
@@ -84,60 +77,101 @@ lcc_status_t lcc_node_get_status(void);
 uint64_t lcc_node_get_node_id(void);
 
 /**
- * @brief Get the configured base event ID
+ * @brief Get screen backlight timeout from CDI config
  * 
- * @return 64-bit base event ID
- */
-uint64_t lcc_node_get_base_event_id(void);
-
-/**
- * @brief Get auto-apply first scene on boot setting
- * 
- * @return true if auto-apply is enabled, false otherwise
- */
-bool lcc_node_get_auto_apply_enabled(void);
-
-/**
- * @brief Get auto-apply transition duration in seconds
- * 
- * @return Duration in seconds (0-300)
- */
-uint16_t lcc_node_get_auto_apply_duration_sec(void);
-
-/**
- * @brief Get screen backlight timeout in seconds
- * 
- * @return Timeout in seconds (0 = disabled, 10-3600 when enabled)
+ * @return Timeout in seconds (0 = disabled)
  */
 uint16_t lcc_node_get_screen_timeout_sec(void);
 
 /**
- * @brief Send a lighting parameter event
+ * @brief Get stale timeout from CDI config
  * 
- * Constructs an event ID from base_event_id + parameter offset + value
- * and sends it to the LCC bus.
- * 
- * @param parameter Parameter index (0=Red, 1=Green, 2=Blue, 3=White, 4=Brightness)
- * @param value Parameter value (0-255)
- * @return ESP_OK on success, error code otherwise
+ * @return Timeout in seconds (0 = disabled)
  */
-esp_err_t lcc_node_send_lighting_event(uint8_t parameter, uint8_t value);
+uint16_t lcc_node_get_stale_timeout_sec(void);
+
+/**
+ * @brief Get query pace from CDI config
+ * 
+ * @return Pace in milliseconds
+ */
+uint16_t lcc_node_get_query_pace_ms(void);
+
+// ----- Turnout Event Operations -----
+
+/**
+ * @brief Send a turnout command event
+ * 
+ * Produces the given event ID on the LCC bus. Use the turnout's
+ * event_normal or event_reverse ID to command the turnout.
+ * 
+ * @param event_id The full 64-bit LCC event ID to send
+ * @return ESP_OK on success
+ */
+esp_err_t lcc_node_send_event(uint64_t event_id);
+
+/**
+ * @brief Register turnout event IDs for consumption
+ * 
+ * Tells the LCC stack to listen for the given event pair.
+ * When either event is seen (EventReport or ProducerIdentified),
+ * the turnout manager will be notified.
+ * 
+ * @param event_normal Event ID for NORMAL/CLOSED state
+ * @param event_reverse Event ID for REVERSE/THROWN state
+ * @return ESP_OK on success
+ */
+esp_err_t lcc_node_register_turnout_events(uint64_t event_normal, uint64_t event_reverse);
+
+/**
+ * @brief Unregister all turnout event listeners
+ * 
+ * Call before re-registering after turnout list changes.
+ */
+void lcc_node_unregister_all_turnout_events(void);
+
+/**
+ * @brief Query state of all registered turnouts
+ * 
+ * Sends IdentifyProducer messages for all registered turnout events,
+ * paced by the configured query_pace_ms to avoid bus flooding.
+ * Runs asynchronously — state updates arrive via the event handler.
+ */
+void lcc_node_query_all_turnout_states(void);
+
+/**
+ * @brief Set discovery mode on/off
+ * 
+ * When enabled, unknown events seen on the bus will be reported
+ * to the discovery callback (if set).
+ * 
+ * @param enabled true to enable discovery mode
+ */
+void lcc_node_set_discovery_mode(bool enabled);
+
+/**
+ * @brief Check if discovery mode is active
+ */
+bool lcc_node_is_discovery_mode(void);
+
+/**
+ * @brief Discovery callback type
+ * 
+ * Called when an unknown event is observed during discovery mode.
+ * The event_id is the observed event, and state indicates whether
+ * it was a ProducerIdentified VALID (NORMAL) or INVALID (REVERSE).
+ */
+typedef void (*lcc_discovery_callback_t)(uint64_t event_id, uint8_t state);
+
+/**
+ * @brief Set the discovery callback
+ * 
+ * @param cb Callback function, or NULL to unregister
+ */
+void lcc_node_set_discovery_callback(lcc_discovery_callback_t cb);
 
 /**
  * @brief Request reboot into bootloader mode for firmware update
- * 
- * Sets an RTC memory flag and restarts the device. On the next boot,
- * the device will enter bootloader mode to receive firmware updates
- * via the LCC Memory Configuration Protocol (memory space 0xEF).
- * 
- * This can be triggered by:
- * - JMRI Firmware Update tool
- * - OpenMRN bootloader_client command-line tool
- * - Any LCC configuration tool that sends the "enter bootloader" command
- * 
- * @note This function does not return - the device will restart.
- * 
- * @see FR-060 Firmware update via LCC
  */
 void lcc_node_request_bootloader(void);
 

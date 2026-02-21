@@ -1,16 +1,16 @@
 idf_component_register(
     SRCS 
         "main.c"
-        "app/scene_storage.c"
+        "app/turnout_storage.c"
+        "app/turnout_manager.c"
         "app/lcc_node.cpp"
-        "app/fade_controller.c"
         "app/screen_timeout.c"
         "app/bootloader_hal.cpp"
         "app/bootloader_display.c"
         "ui/ui_common.c"
         "ui/ui_main.c"
-        "ui/ui_manual.c"
-        "ui/ui_scenes.c"
+        "ui/ui_turnouts.c"
+        "ui/ui_add_turnout.c"
     INCLUDE_DIRS 
         "."
         "app"

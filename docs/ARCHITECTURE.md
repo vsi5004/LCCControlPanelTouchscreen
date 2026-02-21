@@ -3,7 +3,7 @@
 ## 1. Project Structure
 
 ```
-LCCLightingTouchscreen/
+LCCControlPanelTouchscreen/
 ├── CMakeLists.txt
 ├── sdkconfig.defaults
 ├── lv_conf.h                 # LVGL configuration (root level)
@@ -21,15 +21,20 @@ LCCLightingTouchscreen/
 │   ├── main.c                # Entry point, hardware init, SD error screen
 │   ├── lv_conf.h             # LVGL configuration (main level)
 │   ├── app/                  # Application logic
-│   │   ├── lcc_node.cpp/.h   # OpenMRN integration, event production
-│   │   ├── scene_manager.c/.h
-│   │   ├── fade_controller.c/.h  # ✓ Implemented: state machine, interpolation
-│   │   └── screen_timeout.c/.h   # ✓ Implemented: backlight power saving
+│   │   ├── lcc_node.cpp/.h   # OpenMRN integration, event prod/consume
+│   │   ├── lcc_config.hxx    # CDI configuration (PanelConfig)
+│   │   ├── turnout_manager.c/.h  # Thread-safe turnout state management
+│   │   ├── turnout_storage.c/.h  # SD card JSON persistence
+│   │   ├── screen_timeout.c/.h   # Backlight power saving
+│   │   └── bootloader_hal.cpp/.h # OTA bootloader support
 │   └── ui/                   # LVGL screens
-│       ├── ui_common.c/.h    # LVGL init, mutex, flush callbacks
-│       ├── ui_main.c/.h      # Main tabview container
-│       ├── ui_manual.c/.h    # Manual RGBW sliders, Apply button
-│       └── ui_scenes.c/.h    # Card carousel, progress bar, Apply button
+│       ├── ui_common.c/.h    # LVGL init, mutex, flush callbacks, data types
+│       ├── ui_main.c         # Main tabview container (Turnouts + Add Turnout)
+│       ├── ui_turnouts.c     # Turnout switchboard grid (color-coded tiles)
+│       └── ui_add_turnout.c  # Manual turnout entry + event discovery
+├── sdcard/                   # SD card template files
+│   ├── nodeid.txt            # LCC node ID
+│   └── turnouts.json         # Turnout definitions
 └── docs/
 ```
 
@@ -42,19 +47,17 @@ LCCLightingTouchscreen/
 | Task | Priority | Stack | Core | Responsibility |
 |------|----------|-------|------|----------------|
 | lvgl_task | 2 | 6KB | CPU1 | LVGL rendering via `lv_timer_handler()` |
-| openmrn_task | 5 | 8KB | Any | OpenMRN executor loop |
-| lighting_task | 4 | 4KB | Any | Fade controller tick (10ms interval) |
-| main_task | 1 | 4KB | CPU1 | Hardware init, app orchestration |
+| openmrn_task | 5 | 8KB | Any | OpenMRN executor loop (event prod/consume) |
+| main_task | 1 | 4KB | CPU1 | Hardware init, stale checking, screen timeout |
 
 **CPU Affinity Strategy:**
 - **CPU0**: Dedicated to RGB LCD DMA ISRs (bounce buffer transfers)
 - **CPU1**: Main task + LVGL rendering (avoids contention with display DMA)
-- This separation reduces visual artifacts (banding) during UI animations
 
 ### Task Implementation Notes
 - **lvgl_task**: Created by `ui_init()`, runs continuously calling `lv_timer_handler()`
 - **openmrn_task**: Created by `lcc_node_init()`, runs OpenMRN's internal executor
-- **lighting_task**: Created in `app_main()`, calls `fade_controller_tick()` every 10ms
+- **main_task**: Runs `app_main()`, then enters polling loop for screen timeout + stale checking
 
 ---
 

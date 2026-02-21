@@ -1,4 +1,4 @@
-menu "LCC Lighting Controller Configuration"
+menu "LCC Turnout Panel Configuration"
 
     menu "Display Settings"
         config LCD_H_RES
@@ -120,13 +120,7 @@ menu "LCC Lighting Controller Configuration"
             string "Default LCC Node ID"
             default "05.01.01.01.22.60"
             help
-                Default Node ID if config.json is missing.
-
-        config LCC_BASE_EVENT_ID_DEFAULT
-            string "Default Base Event ID"
-            default "05.01.01.01.22.60.00.00"
-            help
-                Default base event ID for lighting commands.
+                Default Node ID if nodeid.txt is missing from SD card.
 
         config LCC_EVENT_RATE_LIMIT_MS
             int "LCC Event Rate Limit (ms)"

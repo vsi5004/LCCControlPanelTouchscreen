@@ -1,7 +1,6 @@
-# LCC Lighting Touchscreen Controller
+# LCC Turnout Control Panel
 
-An ESP32-S3–based LCC/OpenLCB lighting scene controller with a touch LCD user interface for model railroad layout lighting control. Designed specifically to interface with my [LCC Lighting Controller](https://github.com/vsi5004/LCCLightingController)
-
+An ESP32-S3–based LCC/OpenLCB turnout control panel with a touch LCD user interface for model railroad layout turnout control.
 
 ![ESP-IDF](https://img.shields.io/badge/ESP--IDF-v5.1.6-blue)
 ![License](https://img.shields.io/badge/license-BSD--2--Clause-green)
@@ -9,15 +8,16 @@ An ESP32-S3–based LCC/OpenLCB lighting scene controller with a touch LCD user 
 
 ## Overview
 
-![Photo of mounted touchscreen on layout](./docs/img/touchsreen_photo.jpg)
-This device connects to an LCC (Layout Command Control) / OpenLCB CAN bus and sends RGBW lighting commands to follower lighting controller boards. It provides an intuitive touch interface for:
+This device connects to an LCC (Layout Command Control) / OpenLCB CAN bus and provides a touchscreen interface for controlling layout turnouts. It provides an intuitive touch interface for:
 
-- **Manual Control** — Real-time RGBW + brightness adjustment via sliders
-- **Scene Management** — Save, load, edit, reorder, and delete lighting presets
-- **Configurable Fades** — Linear transitions up to 5 minutes with visual progress
+- **Turnout Switchboard** — Color-coded grid showing all turnout states (Normal/Reverse/Unknown/Stale)
+- **One-Tap Toggle** — Tap a tile to throw or close a turnout
+- **Add Turnouts** — Manual event ID entry or bus discovery mode
+- **State Feedback** — Consumes LCC events to show real-time turnout positions
+- **Stale Detection** — Marks turnouts as stale when no update received within timeout
 - **Power Saving** — Automatic backlight timeout with touch-to-wake
 
-The controller does **not** drive LEDs directly; it acts as a command station sending events to downstream lighting nodes.
+The controller sends and receives LCC events for turnout control. Each turnout is defined by a pair of event IDs (Normal/Reverse).
 
 ## Hardware
 
