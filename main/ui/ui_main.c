@@ -44,7 +44,7 @@ void ui_create_main_screen(void)
     lv_obj_set_style_bg_opa(tab_btns, LV_OPA_COVER, LV_PART_ITEMS | LV_STATE_CHECKED);
     lv_obj_set_style_text_color(tab_btns, lv_color_make(255, 255, 255), LV_PART_ITEMS | LV_STATE_CHECKED);
 
-    // Add tabs — Turnouts first
+    // Add tabs - Turnouts first
     s_tab_turnouts = lv_tabview_add_tab(s_tabview, "Turnouts");
     s_tab_add = lv_tabview_add_tab(s_tabview, "Add Turnout");
 

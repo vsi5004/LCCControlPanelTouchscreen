@@ -135,9 +135,20 @@ void lcc_node_unregister_all_turnout_events(void);
  * 
  * Sends IdentifyProducer messages for all registered turnout events,
  * paced by the configured query_pace_ms to avoid bus flooding.
- * Runs asynchronously — state updates arrive via the event handler.
+ * Runs asynchronously - state updates arrive via the event handler.
  */
 void lcc_node_query_all_turnout_states(void);
+
+/**
+ * @brief Query state of a single turnout event pair
+ * 
+ * Sends IdentifyProducer for the normal and reverse events.
+ * The response will arrive asynchronously via the event handler.
+ * 
+ * @param event_normal Event ID for NORMAL/CLOSED state
+ * @param event_reverse Event ID for REVERSE/THROWN state
+ */
+void lcc_node_query_turnout_state(uint64_t event_normal, uint64_t event_reverse);
 
 /**
  * @brief Set discovery mode on/off

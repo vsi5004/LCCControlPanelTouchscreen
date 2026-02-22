@@ -24,18 +24,19 @@ LCCControlPanelTouchscreen/
 │   │   ├── lcc_node.cpp/.h   # OpenMRN integration, event prod/consume
 │   │   ├── lcc_config.hxx    # CDI configuration (PanelConfig)
 │   │   ├── turnout_manager.c/.h  # Thread-safe turnout state management
-│   │   ├── turnout_storage.c/.h  # SD card JSON persistence
+│   │   ├── turnout_storage.c/.h  # SD card JSON persistence + JMRI XML import
 │   │   ├── screen_timeout.c/.h   # Backlight power saving
 │   │   ├── bootloader_hal.cpp/.h # OTA bootloader support
 │   │   └── bootloader_display.c/.h # LCD status during OTA updates
 │   └── ui/                   # LVGL screens
 │       ├── ui_common.c/.h    # LVGL init, mutex, flush callbacks, data types
 │       ├── ui_main.c         # Main tabview container (Turnouts + Add Turnout)
-│       ├── ui_turnouts.c     # Turnout switchboard grid (color-coded tiles)
+│       ├── ui_turnouts.c     # Turnout switchboard grid (color-coded tiles, inline edit/delete)
 │       └── ui_add_turnout.c  # Manual turnout entry + event discovery
 ├── sdcard/                   # SD card template files
 │   ├── nodeid.txt            # LCC node ID
-│   └── turnouts.json         # Turnout definitions
+│   ├── turnouts.json         # Turnout definitions
+│   └── roster.xml            # (Optional) JMRI turnout roster for auto-import
 └── docs/
 ```
 
@@ -104,6 +105,8 @@ STALE   ──(EventReport/ProducerIdentified)──→ NORMAL or REVERSE
 | STALE | Red | 0xF44336 |
 | PENDING | Blue border | 0x2196F3 |
 
+**Display Text:** The UI shows "CLOSED" for Normal state and "THROWN" for Reverse state.
+
 ---
 
 ## 5. OpenMRN Integration
@@ -153,8 +156,8 @@ The following settings optimize scroll and animation performance:
 ### TurnoutEventHandler
 
 Custom `openlcb::SimpleEventHandler` subclass that handles:
-- **EventReport**: Updates turnout state when events are received on the bus
-- **ProducerIdentified**: Updates state from query responses
+- **EventReport**: Updates turnout state when events are received on the bus (no source filtering — loopback echoes are harmless and provide immediate visual feedback)
+- **ProducerIdentified**: Updates state from query responses (only `EventState::VALID` is processed; `INVALID` responses are discarded)
 - **IdentifyConsumer**: Responds to consumer identification requests
 - **IdentifyGlobal**: Responds to global identification requests
 
@@ -199,6 +202,19 @@ effect is achieved via LVGL overlay opacity animation while backlight remains on
 - **Consumption**: TurnoutEventHandler processes incoming EventReport and ProducerIdentified
 - **Query**: `lcc_node_query_all_turnout_states()` — sends IdentifyConsumer for each registered event at startup
 - **Discovery**: `lcc_node_set_discovery_mode()` — enables/disables capturing unknown events for the Add Turnout tab
+
+### JMRI Roster Import
+
+The `turnout_storage` module supports importing turnout definitions from a JMRI
+`roster.xml` file placed on the SD card at `/sdcard/roster.xml`.
+
+**Import Process (runs at startup after loading turnouts.json):**
+1. Parse the `OlcbTurnoutManager` XML section for `<turnout>` elements
+2. Extract `systemName` (contains event ID pair as `MT<event1>;<event2>`)
+3. Extract `userName` for display name (falls back to `systemName` if absent)
+4. Respect `inverted="true"` attribute by swapping Normal/Reverse events
+5. Skip turnouts whose event IDs already exist in the loaded list
+6. Append new turnouts and auto-save the merged `turnouts.json`
 
 ---
 

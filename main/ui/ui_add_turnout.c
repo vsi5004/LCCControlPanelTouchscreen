@@ -1,6 +1,6 @@
 /**
  * @file ui_add_turnout.c
- * @brief Add Turnout Tab — manual entry form and event discovery list
+ * @brief Add Turnout Tab - manual entry form and event discovery list
  *
  * Provides two ways to add turnouts:
  *   1. Manual entry: user types name & event IDs in dotted-hex
@@ -38,6 +38,23 @@ static lv_obj_t *s_discover_list = NULL;
 // Keyboard for text input
 static lv_obj_t *s_keyboard = NULL;
 static lv_obj_t *s_active_ta = NULL;
+
+// Discovery event pairing - raw event IDs seen on the bus
+#define MAX_DISCOVERED_EVENTS 128
+static uint64_t s_discovered_events[MAX_DISCOVERED_EVENTS];
+static int      s_discovered_count = 0;
+
+/// Paired turnout entry ready for the user to add
+typedef struct {
+    uint64_t normal;
+    uint64_t reverse;
+    bool     has_normal;
+    bool     has_reverse;
+} discovered_pair_t;
+
+#define MAX_DISCOVERED_PAIRS 64
+static discovered_pair_t s_pairs[MAX_DISCOVERED_PAIRS];
+static int               s_pair_count = 0;
 
 // ============================================================================
 // Helpers
@@ -140,13 +157,14 @@ static void add_btn_cb(lv_event_t *e)
     // Register events with LCC node
     lcc_node_register_turnout_events(ev_normal, ev_reverse);
 
+    // Query initial state so the tile doesn't stay UNKNOWN
+    lcc_node_query_turnout_state(ev_normal, ev_reverse);
+
     // Save to SD card
     turnout_manager_save();
 
-    // Refresh turnout grid
-    ui_lock();
+    // Refresh turnout grid (already inside LVGL task context, no lock needed)
     ui_turnouts_refresh();
-    ui_unlock();
 
     // Clear form
     lv_textarea_set_text(s_name_ta, "");
@@ -162,6 +180,95 @@ static void add_btn_cb(lv_event_t *e)
 // Discovery mode
 // ============================================================================
 
+/**
+ * @brief Compute the base (even) event ID for an LCC turnout event pair.
+ *
+ * LCC convention: even ID = normal (closed), odd ID = reverse (thrown).
+ * Given either member of the pair, return the normal (even) ID.
+ */
+static uint64_t pair_base(uint64_t event_id)
+{
+    return event_id & ~(uint64_t)1;
+}
+
+/**
+ * @brief Find or create a pair slot for the given event.
+ * @return pointer to pair entry, or NULL if table full.
+ */
+static discovered_pair_t *find_or_create_pair(uint64_t event_id)
+{
+    uint64_t base = pair_base(event_id);
+
+    // Search existing pairs
+    for (int i = 0; i < s_pair_count; i++) {
+        if (pair_base(s_pairs[i].normal) == base ||
+            pair_base(s_pairs[i].reverse) == base) {
+            return &s_pairs[i];
+        }
+    }
+
+    // Create new
+    if (s_pair_count >= MAX_DISCOVERED_PAIRS) return NULL;
+    discovered_pair_t *p = &s_pairs[s_pair_count++];
+    memset(p, 0, sizeof(*p));
+    p->normal  = base;       // even = normal
+    p->reverse = base | 1;   // odd  = reverse
+    return p;
+}
+
+/**
+ * @brief Check whether this event ID already belongs to a registered turnout.
+ */
+static bool event_already_registered(uint64_t event_id)
+{
+    uint64_t base = pair_base(event_id);
+    size_t count = turnout_manager_get_count();
+    for (size_t i = 0; i < count; i++) {
+        turnout_t t;
+        if (turnout_manager_get_by_index(i, &t) == ESP_OK) {
+            if (pair_base(t.event_normal) == base) return true;
+        }
+    }
+    return false;
+}
+
+/**
+ * @brief Rebuild the discovery list widget from s_pairs[].
+ */
+static void rebuild_discovery_list(void);
+
+/**
+ * @brief Click handler for a discovered-event list button.
+ *
+ * Populates the manual-entry form with the paired events so the user can
+ * name the turnout and press Add.
+ */
+static void discovered_btn_cb(lv_event_t *e)
+{
+    int pair_idx = (int)(uintptr_t)lv_event_get_user_data(e);
+    if (pair_idx < 0 || pair_idx >= s_pair_count) return;
+
+    discovered_pair_t *p = &s_pairs[pair_idx];
+
+    char normal_str[32], reverse_str[32];
+    format_event_id_str(p->normal,  normal_str,  sizeof(normal_str));
+    format_event_id_str(p->reverse, reverse_str, sizeof(reverse_str));
+
+    // Fill in the manual-entry form
+    lv_textarea_set_text(s_normal_ta,  normal_str);
+    lv_textarea_set_text(s_reverse_ta, reverse_str);
+
+    // Suggest a default name if the name field is empty
+    if (strlen(lv_textarea_get_text(s_name_ta)) == 0) {
+        char name[32];
+        snprintf(name, sizeof(name), "Turnout %d", turnout_manager_get_count() + 1);
+        lv_textarea_set_text(s_name_ta, name);
+    }
+
+    show_status("Event pair selected - edit name and press Add",
+                lv_color_hex(0x2196F3));
+}
+
 static void discover_btn_cb(lv_event_t *e)
 {
     bool is_active = lcc_node_is_discovery_mode();
@@ -171,8 +278,13 @@ static void discover_btn_cb(lv_event_t *e)
         lcc_node_set_discovery_mode(false);
         lv_label_set_text(s_discover_label, LV_SYMBOL_EYE_OPEN " Start Discovery");
         lv_obj_set_style_bg_color(s_discover_btn, lv_color_hex(0x2196F3), LV_PART_MAIN);
+        // Now that discovery is stopped and no more async callbacks will
+        // modify the list, do a single rebuild to show paired entries
+        // with clickable buttons.
+        rebuild_discovery_list();
     } else {
-        // Start discovery
+        // Clear previous discoveries and start fresh
+        ui_add_turnout_clear_discoveries();
         lcc_node_set_discovery_mode(true);
         lv_label_set_text(s_discover_label, LV_SYMBOL_CLOSE " Stop Discovery");
         lv_obj_set_style_bg_color(s_discover_btn, lv_color_hex(0xF44336), LV_PART_MAIN);
@@ -328,7 +440,7 @@ void ui_create_add_turnout_tab(lv_obj_t *parent)
     lv_obj_set_flex_grow(s_discover_list, 1);
 
     lv_obj_t *empty_disc = lv_label_create(s_discover_list);
-    lv_label_set_text(empty_disc, "Start discovery to see events on the LCC bus...");
+    lv_label_set_text(empty_disc, "Press Start Discovery, then toggle turnouts on your layout.");
     lv_obj_set_style_text_color(empty_disc, lv_color_hex(0x9E9E9E), LV_PART_MAIN);
     lv_obj_set_style_text_font(empty_disc, &lv_font_montserrat_12, LV_PART_MAIN);
 
@@ -343,47 +455,119 @@ void ui_add_turnout_discovery_event(uint64_t event_id, turnout_state_t state)
 {
     if (!s_discover_list) return;
 
-    // Format event ID
-    char id_str[32];
-    format_event_id_str(event_id, id_str, sizeof(id_str));
-
-    // Check if already in the list (avoid duplicates)
-    uint32_t child_count = lv_obj_get_child_cnt(s_discover_list);
-    for (uint32_t i = 0; i < child_count; i++) {
-        lv_obj_t *child = lv_obj_get_child(s_discover_list, i);
-        // Skip non-button children (like the empty label)
-        if (!lv_obj_check_type(child, &lv_list_btn_class)) continue;
-        lv_obj_t *lbl = lv_obj_get_child(child, 0);
-        if (lbl) {
-            const char *text = lv_label_get_text(lbl);
-            if (text && strstr(text, id_str)) return; // Already listed
-        }
+    // Skip events that are already registered as known turnouts
+    if (event_already_registered(event_id)) {
+        ESP_LOGI(TAG, "Ignoring already-registered event %016llX", (unsigned long long)event_id);
+        return;
     }
 
-    // Remove the "Start discovery..." placeholder text if present
-    if (child_count > 0) {
+    // De-duplicate raw events
+    for (int i = 0; i < s_discovered_count; i++) {
+        if (s_discovered_events[i] == event_id) return; // already seen
+    }
+    if (s_discovered_count < MAX_DISCOVERED_EVENTS) {
+        s_discovered_events[s_discovered_count++] = event_id;
+    }
+
+    // Insert into paired table
+    discovered_pair_t *p = find_or_create_pair(event_id);
+    if (!p) return;
+
+    bool is_even = ((event_id & 1) == 0);
+    if (is_even) p->has_normal  = true;
+    else         p->has_reverse = true;
+
+    // Don't rebuild the full LVGL list on every event - that destroys and
+    // recreates all list buttons, which can cause a use-after-free if the
+    // LVGL input tracker still holds a reference to a pressed button.
+    // Instead, show a live count.  The full list is rebuilt once when the
+    // user clicks Stop Discovery.
+    if (s_discover_list) {
+        // Update or create a simple counter label as the first child
         lv_obj_t *first = lv_obj_get_child(s_discover_list, 0);
         if (first && !lv_obj_check_type(first, &lv_list_btn_class)) {
-            lv_obj_del(first);
+            // Reuse existing label
+            int complete = 0;
+            for (int j = 0; j < s_pair_count; j++) {
+                if (s_pairs[j].has_normal && s_pairs[j].has_reverse) complete++;
+            }
+            char buf[80];
+            snprintf(buf, sizeof(buf),
+                     "Listening... %d event(s), %d complete pair(s)",
+                     s_discovered_count, complete);
+            lv_label_set_text(first, buf);
         }
     }
 
-    // Add to list
-    char label_text[48];
-    snprintf(label_text, sizeof(label_text), "%s", id_str);
-    lv_obj_t *btn = lv_list_add_btn(s_discover_list, LV_SYMBOL_RIGHT, label_text);
-    lv_obj_set_style_text_font(btn, &lv_font_montserrat_12, LV_PART_MAIN);
+    char id_str[32];
+    format_event_id_str(event_id, id_str, sizeof(id_str));
+    ESP_LOGI(TAG, "Discovered event: %s (pair %s)",
+             id_str,
+             (p->has_normal && p->has_reverse) ? "COMPLETE" : "partial");
+}
 
-    ESP_LOGI(TAG, "Discovered event: %s", id_str);
+/**
+ * @brief Rebuild the LVGL list widget from the current s_pairs[] table.
+ */
+static void rebuild_discovery_list(void)
+{
+    if (!s_discover_list) return;
+
+    lv_obj_clean(s_discover_list);
+
+    if (s_pair_count == 0) {
+        lv_obj_t *empty = lv_label_create(s_discover_list);
+        lv_label_set_text(empty, "Start discovery to see events on the LCC bus...");
+        lv_obj_set_style_text_color(empty, lv_color_hex(0x9E9E9E), LV_PART_MAIN);
+        lv_obj_set_style_text_font(empty, &lv_font_montserrat_12, LV_PART_MAIN);
+        return;
+    }
+
+    for (int i = 0; i < s_pair_count; i++) {
+        discovered_pair_t *p = &s_pairs[i];
+
+        char label_text[80];
+        char n_str[32], r_str[32];
+        format_event_id_str(p->normal,  n_str, sizeof(n_str));
+        format_event_id_str(p->reverse, r_str, sizeof(r_str));
+
+        if (p->has_normal && p->has_reverse) {
+            snprintf(label_text, sizeof(label_text), "%s / %s", n_str, r_str);
+        } else if (p->has_normal) {
+            snprintf(label_text, sizeof(label_text), "%s / (waiting...)", n_str);
+        } else {
+            snprintf(label_text, sizeof(label_text), "(waiting...) / %s", r_str);
+        }
+
+        const char *icon = (p->has_normal && p->has_reverse)
+                           ? LV_SYMBOL_OK
+                           : LV_SYMBOL_REFRESH;
+
+        lv_obj_t *btn = lv_list_add_btn(s_discover_list, icon, label_text);
+        lv_obj_set_style_text_font(btn, &lv_font_montserrat_12, LV_PART_MAIN);
+
+        // Only make complete pairs clickable
+        if (p->has_normal && p->has_reverse) {
+            lv_obj_add_event_cb(btn, discovered_btn_cb, LV_EVENT_CLICKED,
+                                (void *)(uintptr_t)i);
+        } else {
+            lv_obj_set_style_text_color(btn, lv_color_hex(0x9E9E9E),
+                                        LV_PART_MAIN);
+        }
+    }
 }
 
 void ui_add_turnout_clear_discoveries(void)
 {
+    s_discovered_count = 0;
+    s_pair_count = 0;
+    memset(s_discovered_events, 0, sizeof(s_discovered_events));
+    memset(s_pairs, 0, sizeof(s_pairs));
+
     if (!s_discover_list) return;
     lv_obj_clean(s_discover_list);
 
     lv_obj_t *empty_disc = lv_label_create(s_discover_list);
-    lv_label_set_text(empty_disc, "Start discovery to see events on the LCC bus...");
-    lv_obj_set_style_text_color(empty_disc, lv_color_hex(0x9E9E9E), LV_PART_MAIN);
+    lv_label_set_text(empty_disc, "Press Start Discovery, then toggle turnouts on your layout.");
     lv_obj_set_style_text_font(empty_disc, &lv_font_montserrat_12, LV_PART_MAIN);
 }

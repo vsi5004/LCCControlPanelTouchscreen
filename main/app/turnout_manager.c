@@ -53,12 +53,23 @@ esp_err_t turnout_manager_init(void)
         s_count = loaded;
         ESP_LOGI(TAG, "Loaded %d turnouts from storage", (int)s_count);
     } else if (ret == ESP_ERR_NOT_FOUND) {
-        ESP_LOGI(TAG, "No turnouts file found — starting empty");
+        ESP_LOGI(TAG, "No turnouts file found - starting empty");
         s_count = 0;
         ret = ESP_OK; // Not an error
     } else {
         ESP_LOGW(TAG, "Failed to load turnouts: %s", esp_err_to_name(ret));
         s_count = 0;
+    }
+
+    // Import from JMRI XML if present (supplements existing turnouts)
+    size_t before_import = s_count;
+    esp_err_t jmri_ret = turnout_storage_import_jmri(s_turnouts, &s_count,
+                                                      TURNOUT_MAX_COUNT);
+    if (jmri_ret == ESP_OK && s_count > before_import) {
+        ESP_LOGI(TAG, "JMRI import added %d new turnouts (total: %d)",
+                 (int)(s_count - before_import), (int)s_count);
+        // Save merged list so future boots don't re-import
+        turnout_storage_save(s_turnouts, s_count);
     }
 
     xSemaphoreGive(s_mutex);
@@ -113,7 +124,7 @@ int turnout_manager_add(uint64_t event_normal, uint64_t event_reverse, const cha
     for (size_t i = 0; i < s_count; i++) {
         if (s_turnouts[i].event_normal == event_normal ||
             s_turnouts[i].event_reverse == event_reverse) {
-            ESP_LOGW(TAG, "Duplicate event ID — turnout already exists at index %d", (int)i);
+            ESP_LOGW(TAG, "Duplicate event ID - turnout already exists at index %d", (int)i);
             xSemaphoreGive(s_mutex);
             return -1;
         }
@@ -184,6 +195,25 @@ esp_err_t turnout_manager_rename(size_t index, const char *name)
     return ESP_OK;
 }
 
+esp_err_t turnout_manager_swap(size_t index_a, size_t index_b)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+
+    if (index_a >= s_count || index_b >= s_count) {
+        xSemaphoreGive(s_mutex);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    if (index_a != index_b) {
+        turnout_t tmp = s_turnouts[index_a];
+        s_turnouts[index_a] = s_turnouts[index_b];
+        s_turnouts[index_b] = tmp;
+    }
+
+    xSemaphoreGive(s_mutex);
+    return ESP_OK;
+}
+
 void turnout_manager_set_state_by_event(uint64_t event_id, turnout_state_t state)
 {
     xSemaphoreTake(s_mutex, portMAX_DELAY);
@@ -219,7 +249,7 @@ void turnout_manager_set_state_by_event(uint64_t event_id, turnout_state_t state
     }
 
     xSemaphoreGive(s_mutex);
-    // Event not matched to any turnout — may be discovered by the discovery handler
+    // Event not matched to any turnout - may be discovered by the discovery handler
 }
 
 void turnout_manager_set_pending(size_t index, bool pending)

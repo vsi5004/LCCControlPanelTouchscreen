@@ -12,7 +12,7 @@
  * partition, enabling safe updates with automatic rollback on failure.
  * 
  * @see docs/SPEC.md FR-060 to FR-064 for firmware update requirements
- * @see docs/ARCHITECTURE.md §8 for bootloader integration
+ * @see docs/ARCHITECTURE.md S8 for bootloader integration
  */
 
 #include "bootloader_hal.h"

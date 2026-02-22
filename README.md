@@ -10,9 +10,11 @@ An ESP32-S3–based LCC/OpenLCB turnout control panel with a touch LCD user inte
 
 This device connects to an LCC (Layout Command Control) / OpenLCB CAN bus and provides a touchscreen interface for controlling layout turnouts. It provides an intuitive touch interface for:
 
-- **Turnout Switchboard** — Color-coded grid showing all turnout states (Normal/Reverse/Unknown/Stale)
+- **Turnout Switchboard** — Color-coded grid showing all turnout states (Closed/Thrown/Unknown/Stale)
 - **One-Tap Toggle** — Tap a tile to throw or close a turnout
+- **Inline Edit & Delete** — Rename or remove turnouts directly from their tiles
 - **Add Turnouts** — Manual event ID entry or bus discovery mode
+- **JMRI Import** — Automatically import turnout definitions from a JMRI roster.xml on the SD card
 - **State Feedback** — Consumes LCC events to show real-time turnout positions
 - **Stale Detection** — Marks turnouts as stale when no update received within timeout
 - **Power Saving** — Automatic backlight timeout with touch-to-wake
@@ -190,6 +192,19 @@ All settings are configurable via any LCC configuration tool (JMRI, etc.).
 }
 ```
 
+#### `roster.xml` (Optional — JMRI Import)
+
+If a JMRI `roster.xml` file is placed on the SD card, the panel will automatically
+import any turnout definitions found in the `OlcbTurnoutManager` section on startup.
+
+- Turnouts are matched by event ID — duplicates already in `turnouts.json` are skipped
+- The JMRI `userName` is used as the turnout name; if absent, the `systemName` is used
+- The `inverted="true"` attribute is respected (Normal/Reverse events are swapped)
+- Newly imported turnouts are appended to `turnouts.json` and saved automatically
+
+To export from JMRI: **Tables → Turnouts → File → Store → Store configuration and panels**,
+then copy the resulting XML file to the SD card as `roster.xml`.
+
 #### `splash.jpg`
 
 Custom 800 x 480 px boot splash image (decoded via esp_jpeg). Cannot be saved as "progressive" jpg
@@ -200,8 +215,8 @@ Each turnout is defined by a pair of LCC event IDs:
 
 | Event | Meaning |
 |-------|----------|
-| Normal Event | Sent/consumed when turnout is in Normal (closed) position |
-| Reverse Event | Sent/consumed when turnout is in Reverse (thrown) position |
+| Normal Event | Sent/consumed when turnout is Closed |
+| Reverse Event | Sent/consumed when turnout is Thrown |
 
 ### How It Works
 
@@ -239,11 +254,14 @@ The following settings can be configured via any LCC configuration tool (JMRI, e
 ### Turnouts Tab (Default)
 
 - Color-coded switchboard grid showing all registered turnouts
-- **Green** = Normal (closed), **Yellow** = Reverse (thrown), **Grey** = Unknown, **Red** = Stale
+- **Green** = Closed, **Yellow** = Thrown, **Grey** = Unknown, **Red** = Stale
 - **Blue border** indicates a command is pending (waiting for feedback)
-- Tap any tile to toggle the turnout between Normal and Reverse
-- Tiles are arranged in a responsive flex-wrap layout (150×80px tiles)
-- Automatically refreshes when turnouts are added or removed
+- Tap any tile to toggle the turnout between Closed and Thrown
+- Each tile shows three rows: **Name**, **State** (centered), and **Edit/Delete** buttons
+- Tiles are arranged in a responsive flex-wrap layout (150×110px tiles)
+- **Rename**: Tap the edit icon on a tile to rename it via an on-screen keyboard
+- **Delete**: Tap the trash icon on a tile to remove it (with confirmation dialog)
+- Automatically refreshes when turnouts are added, removed, or imported
 
 ### Add Turnout Tab
 

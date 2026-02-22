@@ -122,7 +122,7 @@ void ui_turnouts_refresh(void);
 /**
  * @brief Update a single turnout tile's visual state
  * 
- * Lightweight update — changes color/status indicator without rebuilding.
+ * Lightweight update - changes color/status indicator without rebuilding.
  * Safe to call from LVGL async context.
  * 
  * @param index Turnout index in the manager array

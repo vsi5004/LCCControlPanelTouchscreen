@@ -88,7 +88,7 @@ The panel acts as an event consumer for state feedback:
 | Message Type | Action |
 |-------------|--------|
 | EventReport | Update turnout state (Normal or Reverse) based on which event was received |
-| ProducerIdentified (valid) | Update turnout state from query response |
+| ProducerIdentified (valid) | Update turnout state from query response (only VALID state is processed; INVALID responses are ignored) |
 | IdentifyConsumer | Respond with ConsumerIdentified for registered events |
 | IdentifyGlobal | Respond with ConsumerIdentified for all registered events |
 
@@ -103,8 +103,9 @@ When the user taps a turnout tile, the panel sends a single event:
 On startup, the panel queries turnout positions:
 1. For each registered turnout, send `IdentifyConsumer` for both Normal and Reverse events
 2. Queries are paced at configurable interval (default 100ms) to avoid bus congestion
-3. Turnout decoders respond with `ProducerIdentified` messages
-4. Panel updates tile colors based on responses
+3. Turnout decoders respond with `ProducerIdentified` messages (one per event, with VALID or INVALID state)
+4. Only `ProducerIdentified` messages with `EventState::VALID` are used to update tile state; `INVALID` responses are discarded
+5. Panel updates tile colors based on responses
 
 ### 3.5 Discovery Mode
 
@@ -244,9 +245,10 @@ Turnouts tab is the default tab shown on startup.
 
 #### FR-020
 Display a grid of color-coded turnout tiles loaded from turnouts.json.
-- Tiles are 150×80 pixels in a flex-wrap layout
-- Each tile shows turnout name and current state text
-- Green = Normal, Yellow = Reverse, Grey = Unknown, Red = Stale
+- Tiles are 150×110 pixels in a flex-wrap layout
+- Each tile shows three rows: turnout name (top), current state text (center), edit/delete buttons (bottom)
+- State text uses "CLOSED" / "THROWN" / "UNKNOWN" / "STALE"
+- Green = Closed, Yellow = Thrown, Grey = Unknown, Red = Stale
 
 AC: All registered turnouts are shown with correct color coding.
 
@@ -265,6 +267,34 @@ AC: Tile color changes within one LVGL refresh cycle of event reception.
 #### FR-023
 Mark turnouts as STALE when no state update received within configurable timeout.
 AC: Tile turns red after stale timeout expires without any state update.
+
+#### FR-024
+Provide inline rename for each turnout via an edit icon button on the tile:
+- Tapping the edit icon opens a full-screen modal with a text input pre-filled with the current name
+- On-screen keyboard for editing
+- Save persists the new name to SD card and updates the tile label
+- Cancel closes the modal without changes
+
+AC: Renamed turnout is saved to turnouts.json and tile label updates immediately.
+
+#### FR-025
+Provide inline delete for each turnout via a trash icon button on the tile:
+- Tapping the trash icon opens a confirmation dialog with warning styling
+- Dialog shows turnout name and "This action cannot be undone" message
+- Confirm removes the turnout, unregisters its LCC events, saves to SD card, and refreshes the grid
+- Cancel closes the dialog without changes
+
+AC: Deleted turnout is removed from turnouts.json and disappears from the grid.
+
+#### FR-026
+Support JMRI roster.xml import:
+- On startup, if `/sdcard/roster.xml` exists, parse the OlcbTurnoutManager section
+- Extract turnout definitions (systemName event pairs + userName)
+- Respect the `inverted` attribute (swap Normal/Reverse events when true)
+- Skip turnouts whose event IDs already exist in the turnout list
+- Append newly discovered turnouts and save the merged list to turnouts.json
+
+AC: Turnouts defined in JMRI roster.xml appear on the Turnouts tab after reboot with the file on SD card.
 
 ### Add Turnout
 

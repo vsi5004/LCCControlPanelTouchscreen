@@ -191,14 +191,11 @@ public:
     TurnoutEventHandler(openlcb::Node *node) : node_(node) {}
 
     /// Register a turnout event pair for consumption
+    /// (With the global listener active, specific registration is not
+    ///  strictly needed for receiving events, but we keep the list so
+    ///  that handle_identify_consumer/global can report them.)
     void register_turnout(uint64_t event_normal, uint64_t event_reverse)
     {
-        // Register as consumer of both events
-        openlcb::EventRegistry::instance()->register_handler(
-            openlcb::EventRegistryEntry(this, event_normal), 0);
-        openlcb::EventRegistry::instance()->register_handler(
-            openlcb::EventRegistryEntry(this, event_reverse), 0);
-        
         registered_events_.push_back(event_normal);
         registered_events_.push_back(event_reverse);
     }
@@ -206,10 +203,18 @@ public:
     /// Unregister all events
     void unregister_all()
     {
-        for (auto &ev : registered_events_) {
-            openlcb::EventRegistry::instance()->unregister_handler(this, ev, 0);
-        }
         registered_events_.clear();
+    }
+
+    /// Register a global catch-all listener so we receive ALL events.
+    /// Called once at init. This is safe because it runs on the same
+    /// thread that creates the stack, before the executor starts or
+    /// right after it starts from the same context.
+    void register_global_listener()
+    {
+        openlcb::EventRegistry::instance()->register_handler(
+            openlcb::EventRegistryEntry(this, 0), 64);
+        ESP_LOGI(TAG, "Global event listener registered");
     }
 
     /// Handle an event report (someone sent a turnout command or state update)
@@ -221,16 +226,21 @@ public:
         route_event(event->event);
     }
 
-    /// Handle ProducerIdentified — learn state from producing nodes
+    /// Handle ProducerIdentified - learn state from producing nodes.
+    /// Producers respond to IdentifyProducer with ProducerIdentified for
+    /// BOTH the normal and reverse events. Only the VALID one indicates
+    /// the actual current state; the INVALID one is the inactive event.
     void handle_producer_identified(const openlcb::EventRegistryEntry &entry,
                                    openlcb::EventReport *event,
                                    BarrierNotifiable *done) override
     {
         AutoNotify n(done);
+        // Only act on the VALID (active) producer state.
+        if (event->state != openlcb::EventState::VALID) return;
         route_event(event->event);
     }
 
-    /// Handle identify consumer — respond that we consume these events
+    /// Handle identify consumer - respond that we consume these events
     void handle_identify_consumer(const openlcb::EventRegistryEntry &entry,
                                  openlcb::EventReport *event,
                                  BarrierNotifiable *done) override
@@ -244,7 +254,7 @@ public:
             done->new_child());
     }
 
-    /// Handle identify global — report all consumed events
+    /// Handle identify global - report all consumed events
     void handle_identify_global(const openlcb::EventRegistryEntry &entry,
                                openlcb::EventReport *event,
                                BarrierNotifiable *done) override
@@ -275,7 +285,7 @@ private:
                 }
             }
         } else if (s_discovery_mode && s_discovery_callback) {
-            // Unknown event in discovery mode — report it
+            // Unknown event in discovery mode - report it
             s_discovery_callback(event_id, 0);
         }
     }
@@ -311,7 +321,7 @@ public:
 
     void factory_reset(int fd) override
     {
-        ESP_LOGI(TAG, "Factory reset — restoring defaults");
+        ESP_LOGI(TAG, "Factory reset - restoring defaults");
         s_cfg->userinfo().name().write(fd, "LCC Turnout Panel");
         s_cfg->userinfo().description().write(fd, "ESP32-S3 Touch LCD Turnout Controller");
         
@@ -460,6 +470,9 @@ esp_err_t lcc_node_init(const lcc_config_t *config)
     // Create turnout event handler
     s_event_handler = new TurnoutEventHandler(s_stack->node());
 
+    // Register global event listener BEFORE starting executor to avoid races
+    s_event_handler->register_global_listener();
+
     // Add CAN port
     ESP_LOGI(TAG, "Adding CAN port...");
     s_stack->add_can_port_select("/dev/twai/twai0");
@@ -551,15 +564,47 @@ void lcc_node_query_all_turnout_states(void)
     for (size_t i = 0; i < count; i++) {
         turnout_t t;
         if (turnout_manager_get_by_index(i, &t) == ESP_OK) {
-            // Send IdentifyProducer for both events
-            s_stack->send_event(t.event_normal);
+            // Send IdentifyProducer (NOT EventReport!) for each event.
+            // MTI_PRODUCER_IDENTIFY asks "who produces this event?" and
+            // producers respond with ProducerIdentified carrying state info.
+            // This does NOT trigger turnout movement.
+            auto *b1 = s_stack->node()->iface()->global_message_write_flow()->alloc();
+            b1->data()->reset(openlcb::Defs::MTI_PRODUCER_IDENTIFY,
+                              s_stack->node()->node_id(),
+                              openlcb::eventid_to_buffer(t.event_normal));
+            s_stack->node()->iface()->global_message_write_flow()->send(b1);
             vTaskDelay(pdMS_TO_TICKS(pace_ms / 2));
-            s_stack->send_event(t.event_reverse);
+
+            auto *b2 = s_stack->node()->iface()->global_message_write_flow()->alloc();
+            b2->data()->reset(openlcb::Defs::MTI_PRODUCER_IDENTIFY,
+                              s_stack->node()->node_id(),
+                              openlcb::eventid_to_buffer(t.event_reverse));
+            s_stack->node()->iface()->global_message_write_flow()->send(b2);
             vTaskDelay(pdMS_TO_TICKS(pace_ms / 2));
         }
     }
 
     ESP_LOGI(TAG, "State query complete for %d turnouts", (int)count);
+}
+
+void lcc_node_query_turnout_state(uint64_t event_normal, uint64_t event_reverse)
+{
+    if (s_status != LCC_STATUS_RUNNING || !s_stack) return;
+
+    auto *b1 = s_stack->node()->iface()->global_message_write_flow()->alloc();
+    b1->data()->reset(openlcb::Defs::MTI_PRODUCER_IDENTIFY,
+                      s_stack->node()->node_id(),
+                      openlcb::eventid_to_buffer(event_normal));
+    s_stack->node()->iface()->global_message_write_flow()->send(b1);
+
+    auto *b2 = s_stack->node()->iface()->global_message_write_flow()->alloc();
+    b2->data()->reset(openlcb::Defs::MTI_PRODUCER_IDENTIFY,
+                      s_stack->node()->node_id(),
+                      openlcb::eventid_to_buffer(event_reverse));
+    s_stack->node()->iface()->global_message_write_flow()->send(b2);
+
+    ESP_LOGI(TAG, "Queried state for turnout events %016llx / %016llx",
+             (unsigned long long)event_normal, (unsigned long long)event_reverse);
 }
 
 void lcc_node_set_discovery_mode(bool enabled)

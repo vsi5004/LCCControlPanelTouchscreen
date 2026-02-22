@@ -65,6 +65,7 @@ Write `0x01` to address `0x24` to set output mode.
 | `/sdcard/turnouts.json` | Turnout definitions (name + event ID pairs) |
 | `/sdcard/splash.jpg` | Boot splash image |
 | `/sdcard/openmrn_config` | OpenMRN persistent config (auto-created) |
+| `/sdcard/roster.xml` | *(Optional)* JMRI turnout roster for auto-import |
 
 ---
 

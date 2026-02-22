@@ -12,12 +12,20 @@
 - Stale detection marks turnouts with no update after timeout
 - Pending flag is set when command sent, cleared when state feedback received
 - Thread safety: concurrent state updates from LCC and UI reads don't corrupt state
+- Renaming a turnout persists across reboots
+- Deleting a turnout removes it from storage and unregisters its LCC events
+- Swap operation correctly reorders turnouts in the array
 
 ### Turnout Storage
 - JSON parsing handles valid turnouts.json correctly
 - Missing or corrupt turnouts.json starts with empty turnout list
 - Turnout additions persist across reboots
 - Event IDs round-trip correctly through dotted-hex serialization
+- JMRI roster.xml import parses OlcbTurnoutManager turnout elements
+- JMRI import skips turnouts whose event IDs already exist
+- JMRI import respects inverted attribute (swaps Normal/Reverse)
+- JMRI import uses userName when available, falls back to systemName
+- Missing or invalid roster.xml is silently ignored (no crash)
 
 ### Configuration
 - Valid nodeid.txt is parsed correctly
@@ -29,14 +37,22 @@
 ## Functional Verification Checklist
 
 ### Turnouts Tab
-- [ ] Turnout tiles display with correct name and state text
-- [ ] Color coding: Green=Normal, Yellow=Reverse, Grey=Unknown, Red=Stale
+- [ ] Turnout tiles display with correct name and state text (CLOSED/THROWN/UNKNOWN/STALE)
+- [ ] Color coding: Green=Closed, Yellow=Thrown, Grey=Unknown, Red=Stale
 - [ ] Tapping a tile sends the correct toggle event
 - [ ] Pending indicator (blue border) appears after tap
 - [ ] Pending indicator clears when state feedback arrives
 - [ ] Tiles update in real-time when events received from bus
 - [ ] Stale tiles turn red after timeout with no state updates
 - [ ] Grid layout wraps correctly at different turnout counts
+- [ ] Edit icon opens rename modal with current name pre-filled
+- [ ] Rename modal: Save updates tile label and persists to SD card
+- [ ] Rename modal: Cancel closes without changes
+- [ ] Trash icon opens delete confirmation dialog
+- [ ] Delete dialog shows turnout name and warning message
+- [ ] Delete confirm: removes turnout, unregisters LCC events, refreshes grid
+- [ ] Delete cancel: closes dialog without changes
+- [ ] Tiles show 3-row layout: Name / State / Edit+Delete buttons (150×110px)
 
 ### Add Turnout Tab
 - [ ] Name, Normal Event ID, and Reverse Event ID fields accept input
@@ -51,9 +67,14 @@
 - [ ] Splash screen displays on startup
 - [ ] Turnout positions queried after LCC initialization
 - [ ] Tiles update as query responses arrive
+- [ ] Only ProducerIdentified with VALID state updates tiles (INVALID ignored)
 - [ ] Missing SD card shows error screen
 - [ ] Missing nodeid.txt uses default node ID
 - [ ] Empty turnouts.json shows empty grid (no crash)
+- [ ] JMRI roster.xml on SD card imports new turnouts automatically
+- [ ] JMRI import skips duplicate event IDs
+- [ ] JMRI import handles inverted turnouts correctly
+- [ ] Missing roster.xml does not cause errors
 
 ### Stale Detection
 - [ ] Turnouts transition to STALE after configured timeout

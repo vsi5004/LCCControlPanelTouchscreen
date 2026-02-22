@@ -178,7 +178,7 @@ static void ui_turnouts_update_tile_async(void *param)
 }
 
 /**
- * @brief LCC state update callback — called by turnout_manager when state changes
+ * @brief LCC state update callback - called by turnout_manager when state changes
  * 
  * This runs from the LCC executor thread context. We use lv_async_call
  * to safely update the LVGL UI from the LVGL task.
@@ -190,6 +190,34 @@ static void turnout_state_changed_cb(int index, turnout_state_t new_state)
     
     // Schedule UI update via LVGL async call (thread-safe)
     lv_async_call((lv_async_cb_t)ui_turnouts_update_tile_async, (void*)(uintptr_t)packed);
+}
+
+/**
+ * @brief Async LVGL callback for discovery event
+ */
+static void discovery_event_async(void *param)
+{
+    uint64_t event_id = *((uint64_t *)param);
+    free(param);
+    // Only process if discovery is still active - stale callbacks
+    // from the LCC thread may arrive after the user stops discovery.
+    // Processing them would rebuild the LVGL list and cause a
+    // use-after-free if the user is interacting with list buttons.
+    if (!lcc_node_is_discovery_mode()) return;
+    ui_add_turnout_discovery_event(event_id, TURNOUT_STATE_UNKNOWN);
+}
+
+/**
+ * @brief Discovery callback - called from LCC executor when unknown event seen
+ */
+static void discovery_cb(uint64_t event_id, uint8_t state)
+{
+    // We need to pass a 64-bit value to LVGL async - heap-allocate it
+    uint64_t *ev = (uint64_t *)malloc(sizeof(uint64_t));
+    if (ev) {
+        *ev = event_id;
+        lv_async_call((lv_async_cb_t)discovery_event_async, ev);
+    }
 }
 
 /**
@@ -557,6 +585,9 @@ void app_main(void)
     // Set state change callback for UI updates
     turnout_manager_set_state_callback(turnout_state_changed_cb);
     
+    // Set discovery callback for Add Turnout tab
+    lcc_node_set_discovery_callback(discovery_cb);
+    
     // Display splash image from SD card (FAT uses 8.3 filenames)
     ret = load_and_display_image(s_lcd_panel, "/sdcard/SPLASH.JPG");
     if (ret != ESP_OK) {
@@ -623,21 +654,21 @@ void app_main(void)
 
     ESP_LOGI(TAG, "Initialization complete - entering main loop");
 
-    // Main loop: screen timeout + stale state checking + status reporting
+    // Main loop: screen timeout + periodic state refresh + status reporting
     TickType_t last_status_tick = xTaskGetTickCount();
-    TickType_t last_stale_tick = xTaskGetTickCount();
+    TickType_t last_refresh_tick = xTaskGetTickCount();
     while (1) {
         // Tick screen timeout every 500ms
         screen_timeout_tick();
         vTaskDelay(pdMS_TO_TICKS(500));
         
-        // Check for stale turnouts every 5 seconds
-        if ((xTaskGetTickCount() - last_stale_tick) >= pdMS_TO_TICKS(5000)) {
-            last_stale_tick = xTaskGetTickCount();
-            uint16_t stale_sec = lcc_node_get_stale_timeout_sec();
-            if (stale_sec > 0) {
-                turnout_manager_check_stale((uint32_t)stale_sec * 1000);
-            }
+        // Periodically re-query turnout states to stay in sync
+        uint16_t refresh_sec = lcc_node_get_stale_timeout_sec();
+        if (refresh_sec > 0 &&
+            (xTaskGetTickCount() - last_refresh_tick) >= pdMS_TO_TICKS((uint32_t)refresh_sec * 1000)) {
+            last_refresh_tick = xTaskGetTickCount();
+            ESP_LOGI(TAG, "Refreshing turnout states (interval=%u sec)", refresh_sec);
+            lcc_node_query_all_turnout_states();
         }
         
         // Report status every 30 seconds

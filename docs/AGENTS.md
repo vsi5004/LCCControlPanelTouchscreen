@@ -7,12 +7,24 @@
 | Board Drivers | ✓ Complete | CH422G, LCD, Touch, SD all working |
 | LCC/OpenMRN | ✓ Complete | Node init, TWAI, event production/consumption, CDI/ACDI |
 | LVGL UI | ✓ Complete | Turnout Switchboard (left) + Add Turnout tabs |
-| Turnout Storage | ✓ Complete | JSON parse/save on SD card |
-| Turnout Manager | ✓ Complete | Thread-safe state management with FreeRTOS mutex |
+| Turnout Storage | ✓ Complete | JSON parse/save on SD card + JMRI roster.xml import |
+| Turnout Manager | ✓ Complete | Thread-safe state management with FreeRTOS mutex, swap/reorder |
 | SD Error Screen | ✓ Complete | Displays when SD card missing |
 | Screen Timeout | ✓ Complete | Backlight power saving with touch-to-wake |
 | Stale Detection | ✓ Complete | Marks turnouts stale after configurable timeout |
 | Firmware Update | ✓ Complete | OTA via LCC Memory Config Protocol, JMRI compatible |
+| Inline Edit/Delete | ✓ Complete | Rename and delete turnouts from tile icons |
+
+### Recent Changes (Session 2026-02-22)
+- Added inline edit (rename) and delete for turnout tiles with full-screen modals
+- Restructured tile layout: 150×110px, 3 rows (Name / State / Edit+Delete buttons)
+- Changed state display text from "NORMAL"/"REVERSE" to "CLOSED"/"THROWN"
+- Custom delete confirmation dialog with Material Red warning styling
+- Added `turnout_manager_swap()` for future reorder support
+- Fixed LCC event loopback: removed source filtering on EventReport (loopback is harmless)
+- Fixed startup state polling: only process ProducerIdentified with EventState::VALID
+- Added JMRI roster.xml import (parses OlcbTurnoutManager section, deduplicates, respects inverted)
+- Updated all documentation
 
 ### Recent Changes (Session 2026-02-21)
 - Converted from lighting scene controller to turnout control panel
@@ -42,8 +54,8 @@
 | Bootloader HAL | `main/app/bootloader_hal.*` | OTA firmware updates via LCC |
 | Bootloader Display | `main/app/bootloader_display.*` | LCD status during OTA updates |
 | LVGL UI | `main/ui/*` | Screens, widgets, touch handling |
-| Turnout Storage | `main/app/turnout_storage.*` | JSON parse/save on SD card |
-| Turnout Manager | `main/app/turnout_manager.*` | Thread-safe turnout state, stale detection |
+| Turnout Storage | `main/app/turnout_storage.*` | JSON parse/save on SD card, JMRI XML import |
+| Turnout Manager | `main/app/turnout_manager.*` | Thread-safe turnout state, stale detection, swap/reorder |
 
 ---
 
@@ -81,6 +93,8 @@
 | GPIO assignments | INTERFACES.md, sdkconfig.defaults |
 | Config file format | SPEC.md §4-5, turnout_storage |
 | New component | AGENTS.md, CMakeLists.txt |
+| Turnout UI changes | SPEC.md §6 (FR-020+), README.md UI section |
+| JMRI import | SPEC.md FR-026, ARCHITECTURE.md §5 |
 
 ---
 

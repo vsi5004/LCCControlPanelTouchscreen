@@ -3,7 +3,7 @@
  * @brief Turnout state management and coordination
  * 
  * Manages the in-memory array of turnout definitions, state tracking,
- * and coordination between LCC events and the UI. Thread-safe — can be
+ * and coordination between LCC events and the UI. Thread-safe - can be
  * called from the OpenMRN executor thread and the LVGL task.
  */
 
@@ -23,7 +23,7 @@ extern "C" {
  * @brief Callback type for turnout state changes
  * 
  * Called from the turnout manager when a turnout's state is updated
- * (e.g., from an LCC event). The callback should be lightweight —
+ * (e.g., from an LCC event). The callback should be lightweight -
  * typically queues an LVGL UI update.
  * 
  * @param index Turnout index in the manager array
@@ -98,6 +98,15 @@ esp_err_t turnout_manager_remove(size_t index);
  * @return ESP_OK on success
  */
 esp_err_t turnout_manager_rename(size_t index, const char *name);
+
+/**
+ * @brief Swap two turnouts (for reordering)
+ * 
+ * @param index_a First turnout index
+ * @param index_b Second turnout index
+ * @return ESP_OK on success
+ */
+esp_err_t turnout_manager_swap(size_t index_a, size_t index_b);
 
 /**
  * @brief Update turnout state from an LCC event

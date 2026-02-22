@@ -12,7 +12,7 @@
  * 4. Reboots into the new firmware
  * 
  * @see docs/SPEC.md for firmware update requirements
- * @see docs/ARCHITECTURE.md §6 for bootloader design
+ * @see docs/ARCHITECTURE.md S6 for bootloader design
  */
 
 #ifndef BOOTLOADER_HAL_H_

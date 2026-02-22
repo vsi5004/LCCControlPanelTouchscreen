@@ -17,14 +17,14 @@ namespace openlcb
 {
 
 /// Configuration version. Increment when making incompatible changes.
-/// v0x0100: Turnout panel — replaces lighting controller config
+/// v0x0100: Turnout panel - replaces lighting controller config
 static constexpr uint16_t CANONICAL_VERSION = 0x0100;
 
 /// Default screen timeout in seconds (0 = disabled)
 static constexpr uint16_t DEFAULT_SCREEN_TIMEOUT_SEC = 60;
 
-/// Default stale timeout in seconds (0 = disabled)
-static constexpr uint16_t DEFAULT_STALE_TIMEOUT_SEC = 300;
+/// Default state refresh interval in seconds (0 = disabled)
+static constexpr uint16_t DEFAULT_STALE_TIMEOUT_SEC = 120;
 
 /// Default query pace in milliseconds between state queries
 static constexpr uint16_t DEFAULT_QUERY_PACE_MS = 100;
@@ -42,17 +42,17 @@ CDI_GROUP_ENTRY(screen_timeout_sec, Uint16ConfigEntry,
     Min(0),
     Max(3600));
 
-/// Stale timeout — mark turnouts as stale if no state update received
+/// State refresh interval - re-query turnout states periodically
 CDI_GROUP_ENTRY(stale_timeout_sec, Uint16ConfigEntry,
-    Name("Stale Timeout (seconds)"),
-    Description("Time in seconds before a turnout is marked STALE if no state "
-                "update is received. Set to 0 to disable stale detection. "
-                "Default: 300 seconds (5 minutes)."),
+    Name("State Refresh Interval (seconds)"),
+    Description("How often to re-query all turnout states from the bus. "
+                "This keeps the display in sync even if events were missed. "
+                "Set to 0 to disable. Default: 120 seconds (2 minutes)."),
     Default(DEFAULT_STALE_TIMEOUT_SEC),
     Min(0),
     Max(3600));
 
-/// Query pace — minimum interval between turnout state queries
+/// Query pace - minimum interval between turnout state queries
 CDI_GROUP_ENTRY(query_pace_ms, Uint16ConfigEntry,
     Name("Query Pace (milliseconds)"),
     Description("Minimum interval in milliseconds between turnout state queries "
