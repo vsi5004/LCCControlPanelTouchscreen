@@ -16,6 +16,8 @@
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <string.h>
+#include <stdio.h>
+#include <errno.h>
 
 static const char *TAG = "turnout_mgr";
 
@@ -70,6 +72,13 @@ esp_err_t turnout_manager_init(void)
                  (int)(s_count - before_import), (int)s_count);
         // Save merged list so future boots don't re-import
         turnout_storage_save(s_turnouts, s_count);
+
+        // Rename roster.xml → roster_bak.xml so it isn't re-imported next boot
+        if (rename(TURNOUT_JMRI_IMPORT_PATH, "/sdcard/roster_bak.xml") == 0) {
+            ESP_LOGI(TAG, "Renamed roster.xml to roster_bak.xml");
+        } else {
+            ESP_LOGW(TAG, "Could not rename roster.xml: %s", strerror(errno));
+        }
     }
 
     xSemaphoreGive(s_mutex);
@@ -190,6 +199,22 @@ esp_err_t turnout_manager_rename(size_t index, const char *name)
 
     strncpy(s_turnouts[index].name, name, sizeof(s_turnouts[index].name) - 1);
     s_turnouts[index].name[sizeof(s_turnouts[index].name) - 1] = '\0';
+
+    xSemaphoreGive(s_mutex);
+    return ESP_OK;
+}
+
+esp_err_t turnout_manager_flip_polarity(size_t index)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    if (index >= s_count) {
+        xSemaphoreGive(s_mutex);
+        return ESP_ERR_INVALID_ARG;
+    }
+
+    uint64_t tmp = s_turnouts[index].event_normal;
+    s_turnouts[index].event_normal = s_turnouts[index].event_reverse;
+    s_turnouts[index].event_reverse = tmp;
 
     xSemaphoreGive(s_mutex);
     return ESP_OK;

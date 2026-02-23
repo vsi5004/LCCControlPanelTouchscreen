@@ -7,6 +7,7 @@
 
 #include "lvgl.h"
 #include "esp_err.h"
+#include "esp_lcd_types.h"
 #include <stdint.h>
 #include <stddef.h>
 #include <stdbool.h>
@@ -65,11 +66,23 @@ typedef struct {
 esp_err_t ui_init(lv_disp_t **disp, lv_indev_t **touch_indev);
 
 /**
- * @brief Show splash screen
- * 
- * @param disp LVGL display object
+ * @brief Display a JPEG splash image on the LCD framebuffer (pre-LVGL)
+ *
+ * Writes directly to the RGB LCD framebuffer — does NOT use LVGL.
+ *
+ * @param panel LCD panel handle
+ * @param filepath Path to baseline JPEG file on SD (e.g., "/sdcard/SPLASH.JPG")
+ * @return esp_err_t ESP_OK on success
  */
-void ui_show_splash(lv_disp_t *disp);
+esp_err_t ui_splash_show_image(esp_lcd_panel_handle_t panel, const char *filepath);
+
+/**
+ * @brief Show SD-card-missing error screen and halt
+ *
+ * Initialises LVGL if needed, displays a warning, and loops forever.
+ * Does NOT return — the user must insert an SD card and restart.
+ */
+void ui_splash_show_sd_error(void);
 
 /**
  * @brief Show main UI (tabs with Turnouts and Add Turnout)
@@ -89,11 +102,6 @@ bool ui_lock(void);
 void ui_unlock(void);
 
 // ----- Main Screen Functions -----
-
-/**
- * @brief Create the main screen with tabview
- */
-void ui_create_main_screen(void);
 
 /**
  * @brief Get the turnouts tab object
@@ -131,6 +139,15 @@ void ui_turnouts_refresh(void);
 void ui_turnouts_update_tile(int index, turnout_state_t state);
 
 /**
+ * @brief Invalidate turnout tile tracking pointers
+ *
+ * Must be called when the settings screen is destroyed (before navigating
+ * to the panel screen) so that async state-change callbacks don't access
+ * freed LVGL objects.
+ */
+void ui_turnouts_invalidate(void);
+
+/**
  * @brief Clear the command-pending indicator on a turnout tile
  * 
  * @param index Turnout index
@@ -156,6 +173,100 @@ void ui_add_turnout_discovery_event(uint64_t event_id, turnout_state_t state);
  * @brief Clear the discovery list
  */
 void ui_add_turnout_clear_discoveries(void);
+
+// ============================================================================
+// Panel Layout Data Model (types, constants, operations → panel_layout.h)
+// ============================================================================
+
+#include "panel_layout.h"
+
+/**
+ * @brief Width of the panel canvas area in pixels (full screen width)
+ */
+#define PANEL_CANVAS_WIDTH  800
+
+/**
+ * @brief Height of the panel canvas area (screen height minus header bar)
+ */
+#define PANEL_CANVAS_HEIGHT 440
+
+/**
+ * @brief Header bar height on the panel screen (contains settings button)
+ */
+#define PANEL_HEADER_HEIGHT 40
+
+// ----- Panel Screen Functions -----
+
+/**
+ * @brief Create the control panel screen (default/main screen)
+ *
+ * Displays the layout diagram with turnouts and tracks.
+ * Has a settings gear icon in the upper-right corner.
+ */
+void ui_create_panel_screen(void);
+
+/**
+ * @brief Update a turnout's visual state on the panel screen
+ *
+ * Lightweight update — changes line colors without full re-render.
+ * Safe to call from LVGL async context.
+ *
+ * @param index Turnout index in the manager array
+ * @param state New state to display
+ */
+void ui_panel_update_turnout(int index, turnout_state_t state);
+
+/**
+ * @brief Invalidate panel screen tracking pointers
+ *
+ * Must be called when the panel screen is destroyed (before navigating
+ * to the settings screen) so that async state-change callbacks don't
+ * access freed LVGL objects.
+ */
+void ui_panel_invalidate(void);
+
+/**
+ * @brief Trigger a full re-render of the panel screen
+ *
+ * Call after the panel builder modifies the layout.
+ */
+void ui_panel_refresh(void);
+
+// ----- Settings Screen Functions -----
+
+/**
+ * @brief Show the settings screen (tabview with 3 tabs)
+ *
+ * Creates a screen with: Turnouts, Add Turnout, Panel Builder tabs,
+ * plus a back button to return to the control panel.
+ */
+void ui_show_settings(void);
+
+/**
+ * @brief Show the settings screen and jump directly to a specific tab
+ *
+ * @param tab_idx Zero-based tab index (0=Turnouts, 1=Add Turnout, 2=Panel Builder)
+ */
+void ui_show_settings_at_tab(uint32_t tab_idx);
+
+/**
+ * @brief Get the panel builder tab object
+ */
+lv_obj_t* ui_get_panel_builder_tab(void);
+
+// ----- Panel Builder Tab Functions -----
+
+/**
+ * @brief Create the panel builder tab content
+ *
+ * @param parent The tab container to build into
+ */
+void ui_create_panel_builder_tab(lv_obj_t *parent);
+
+/**
+ * @brief Refresh the panel builder view after layout changes
+ */
+void ui_panel_builder_refresh(void);
 
 #ifdef __cplusplus
 }

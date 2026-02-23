@@ -63,9 +63,17 @@ Write `0x01` to address `0x24` to set output mode.
 |------|---------|
 | `/sdcard/nodeid.txt` | LCC Node ID (plain text, dotted hex) |
 | `/sdcard/turnouts.json` | Turnout definitions (name + event ID pairs) |
+| `/sdcard/panel.json` | Panel layout (placed turnouts, endpoints, tracks) |
 | `/sdcard/splash.jpg` | Boot splash image |
 | `/sdcard/openmrn_config` | OpenMRN persistent config (auto-created) |
 | `/sdcard/roster.xml` | *(Optional)* JMRI turnout roster for auto-import |
+
+### SD Card Write Retry
+
+SPI-mode SD cards can timeout (`sdmmc_send_cmd` returns `0x107` / `ESP_ERR_TIMEOUT`)
+after extended idle periods when the card enters a low-power state. Both
+`panel_storage_save()` and `turnout_storage_save()` retry `fopen()` up to 3 times
+with 100ms delays between attempts. The card typically responds on the second try.
 
 ---
 

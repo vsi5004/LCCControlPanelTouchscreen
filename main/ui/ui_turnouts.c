@@ -13,6 +13,8 @@
 
 #include "ui_common.h"
 #include "app/turnout_manager.h"
+#include "app/panel_layout.h"
+#include "app/panel_storage.h"
 #include "app/lcc_node.h"
 #include "esp_log.h"
 #include "esp_timer.h"
@@ -53,6 +55,16 @@ static lv_obj_t *s_tiles[TURNOUT_MAX_COUNT];
 static lv_obj_t *s_tile_names[TURNOUT_MAX_COUNT];
 static lv_obj_t *s_tile_states[TURNOUT_MAX_COUNT];
 static int s_tile_count = 0;
+
+void ui_turnouts_invalidate(void)
+{
+    memset(s_tiles, 0, sizeof(s_tiles));
+    memset(s_tile_names, 0, sizeof(s_tile_names));
+    memset(s_tile_states, 0, sizeof(s_tile_states));
+    s_tile_count = 0;
+    s_grid_container = NULL;
+    s_empty_label = NULL;
+}
 
 // Edit / delete modal state
 static int s_edit_index = -1;
@@ -179,6 +191,50 @@ static void rename_save_cb(lv_event_t *e)
     }
 }
 
+static void flip_polarity_cb(lv_event_t *e)
+{
+    (void)e;
+    if (s_edit_index < 0) return;
+
+    int idx = s_edit_index;
+
+    // Get old event_normal before flip (for panel layout update)
+    turnout_t t_before;
+    if (turnout_manager_get_by_index(idx, &t_before) != ESP_OK) return;
+    uint64_t old_event_normal = t_before.event_normal;
+
+    // Flip events in the manager
+    turnout_manager_flip_polarity((size_t)idx);
+
+    // Update panel layout item's event_normal key if this turnout is placed
+    panel_layout_t *layout = panel_layout_get();
+    int pi = panel_layout_find_item(layout, old_event_normal);
+    if (pi >= 0) {
+        turnout_t t_after;
+        if (turnout_manager_get_by_index(idx, &t_after) == ESP_OK) {
+            layout->items[pi].event_normal = t_after.event_normal;
+        }
+        panel_storage_save(layout);
+    }
+
+    // Re-register LCC events
+    lcc_node_unregister_all_turnout_events();
+    size_t count = turnout_manager_get_count();
+    for (size_t i = 0; i < count; i++) {
+        turnout_t rem;
+        if (turnout_manager_get_by_index(i, &rem) == ESP_OK) {
+            lcc_node_register_turnout_events(rem.event_normal, rem.event_reverse);
+        }
+    }
+
+    turnout_manager_save();
+
+    ESP_LOGI(TAG, "Flipped polarity for turnout %d", idx);
+
+    rename_close();
+    ui_turnouts_refresh();
+}
+
 static void rename_cancel_cb(lv_event_t *e)
 {
     (void)e;
@@ -203,8 +259,8 @@ static void rename_open(int index)
 
     // White panel
     lv_obj_t *panel = lv_obj_create(s_rename_overlay);
-    lv_obj_set_size(panel, 400, 145);
-    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 20);
+    lv_obj_set_size(panel, 420, 200);
+    lv_obj_align(panel, LV_ALIGN_TOP_MID, 0, 15);
     lv_obj_set_style_bg_color(panel, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
     lv_obj_set_style_bg_opa(panel, LV_OPA_COVER, LV_PART_MAIN);
     lv_obj_set_style_radius(panel, 12, LV_PART_MAIN);
@@ -213,19 +269,38 @@ static void rename_open(int index)
 
     // Title
     lv_obj_t *title = lv_label_create(panel);
-    lv_label_set_text(title, "Rename Turnout");
+    lv_label_set_text(title, "Edit Turnout");
     lv_obj_set_style_text_font(title, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_set_style_text_color(title, lv_color_hex(COLOR_TEXT_DARK), LV_PART_MAIN);
     lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 0);
 
+    // Name label
+    lv_obj_t *name_lbl = lv_label_create(panel);
+    lv_label_set_text(name_lbl, "Name:");
+    lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_12, LV_PART_MAIN);
+    lv_obj_set_style_text_color(name_lbl, lv_color_hex(0x757575), LV_PART_MAIN);
+    lv_obj_align(name_lbl, LV_ALIGN_TOP_LEFT, 8, 26);
+
     // Text area pre-filled with current name
     s_rename_ta = lv_textarea_create(panel);
-    lv_obj_set_size(s_rename_ta, 360, 40);
+    lv_obj_set_size(s_rename_ta, 380, 40);
     lv_textarea_set_max_length(s_rename_ta, 31);
     lv_textarea_set_one_line(s_rename_ta, true);
     lv_textarea_set_text(s_rename_ta, t.name);
     lv_obj_set_style_text_font(s_rename_ta, &lv_font_montserrat_14, LV_PART_MAIN);
-    lv_obj_align(s_rename_ta, LV_ALIGN_TOP_MID, 0, 30);
+    lv_obj_align(s_rename_ta, LV_ALIGN_TOP_MID, 0, 42);
+
+    // Flip Polarity button
+    lv_obj_t *flip_btn = lv_btn_create(panel);
+    lv_obj_set_size(flip_btn, 380, 36);
+    lv_obj_set_style_bg_color(flip_btn, lv_color_hex(0xFF9800), LV_PART_MAIN);
+    lv_obj_set_style_radius(flip_btn, 6, LV_PART_MAIN);
+    lv_obj_align(flip_btn, LV_ALIGN_TOP_MID, 0, 90);
+    lv_obj_t *flip_lbl = lv_label_create(flip_btn);
+    lv_label_set_text(flip_lbl, LV_SYMBOL_REFRESH " Flip Polarity (Swap Normal / Reverse)");
+    lv_obj_set_style_text_font(flip_lbl, &lv_font_montserrat_12, LV_PART_MAIN);
+    lv_obj_center(flip_lbl);
+    lv_obj_add_event_cb(flip_btn, flip_polarity_cb, LV_EVENT_CLICKED, NULL);
 
     // Save button
     lv_obj_t *save_btn = lv_btn_create(panel);
@@ -287,6 +362,16 @@ static void delete_confirm_btn_cb(lv_event_t *e)
     if (turnout_manager_get_by_index(s_delete_index, &t) == ESP_OK) {
         ESP_LOGI(TAG, "Deleting turnout '%s' at index %d",
                  t.name, s_delete_index);
+
+        // Remove matching panel item (+ cascade-delete connected tracks)
+        panel_layout_t *layout = panel_layout_get();
+        int pi = panel_layout_find_item(layout, t.event_normal);
+        if (pi >= 0) {
+            ESP_LOGI(TAG, "Removing panel item for deleted turnout (event %llx)",
+                     (unsigned long long)t.event_normal);
+            panel_layout_remove_item(layout, (size_t)pi);
+            panel_storage_save(layout);
+        }
     }
 
     turnout_manager_remove((size_t)s_delete_index);

@@ -100,6 +100,16 @@ esp_err_t turnout_manager_remove(size_t index);
 esp_err_t turnout_manager_rename(size_t index, const char *name);
 
 /**
+ * @brief Flip turnout polarity (swap event_normal and event_reverse)
+ *
+ * After flipping, the caller should re-register LCC events and save.
+ *
+ * @param index Turnout index
+ * @return ESP_OK on success
+ */
+esp_err_t turnout_manager_flip_polarity(size_t index);
+
+/**
  * @brief Swap two turnouts (for reordering)
  * 
  * @param index_a First turnout index

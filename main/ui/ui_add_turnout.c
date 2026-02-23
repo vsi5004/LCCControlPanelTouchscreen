@@ -121,6 +121,22 @@ static void ta_focus_cb(lv_event_t *e)
 }
 
 // ============================================================================
+// Swap Normal / Reverse text areas
+// ============================================================================
+
+static void swap_events_cb(lv_event_t *e)
+{
+    (void)e;
+    const char *normal_str = lv_textarea_get_text(s_normal_ta);
+    const char *reverse_str = lv_textarea_get_text(s_reverse_ta);
+    char tmp[24];
+    strncpy(tmp, normal_str, sizeof(tmp) - 1);
+    tmp[sizeof(tmp) - 1] = '\0';
+    lv_textarea_set_text(s_normal_ta, reverse_str);
+    lv_textarea_set_text(s_reverse_ta, tmp);
+}
+
+// ============================================================================
 // Add button callback
 // ============================================================================
 
@@ -344,7 +360,7 @@ void ui_create_add_turnout_tab(lv_obj_t *parent)
 
     // Normal event field
     lv_obj_t *normal_col = lv_obj_create(form_row);
-    lv_obj_set_size(normal_col, 220, LV_SIZE_CONTENT);
+    lv_obj_set_size(normal_col, 200, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(normal_col, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(normal_col, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(normal_col, 0, LV_PART_MAIN);
@@ -359,12 +375,40 @@ void ui_create_add_turnout_tab(lv_obj_t *parent)
     lv_textarea_set_one_line(s_normal_ta, true);
     lv_textarea_set_max_length(s_normal_ta, 23);
     lv_textarea_set_placeholder_text(s_normal_ta, "XX.XX.XX.XX.XX.XX.XX.XX");
-    lv_obj_set_width(s_normal_ta, 210);
+    lv_obj_set_width(s_normal_ta, 190);
     lv_obj_add_event_cb(s_normal_ta, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
+
+    // Swap button between Normal and Reverse
+    lv_obj_t *swap_col = lv_obj_create(form_row);
+    lv_obj_set_size(swap_col, 40, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(swap_col, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(swap_col, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(swap_col, 0, LV_PART_MAIN);
+    lv_obj_set_layout(swap_col, LV_LAYOUT_FLEX);
+    lv_obj_set_flex_flow(swap_col, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(swap_col, LV_FLEX_ALIGN_END, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+
+    // Spacer to align with text area (below label)
+    lv_obj_t *swap_spacer = lv_obj_create(swap_col);
+    lv_obj_set_size(swap_spacer, 1, 16);
+    lv_obj_set_style_bg_opa(swap_spacer, LV_OPA_TRANSP, LV_PART_MAIN);
+    lv_obj_set_style_border_width(swap_spacer, 0, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(swap_spacer, 0, LV_PART_MAIN);
+
+    lv_obj_t *swap_btn = lv_btn_create(swap_col);
+    lv_obj_set_size(swap_btn, 36, 36);
+    lv_obj_set_style_bg_color(swap_btn, lv_color_hex(0xFF9800), LV_PART_MAIN);
+    lv_obj_set_style_radius(swap_btn, 6, LV_PART_MAIN);
+    lv_obj_set_style_pad_all(swap_btn, 0, LV_PART_MAIN);
+    lv_obj_add_event_cb(swap_btn, swap_events_cb, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *swap_lbl = lv_label_create(swap_btn);
+    lv_label_set_text(swap_lbl, LV_SYMBOL_REFRESH);
+    lv_obj_set_style_text_font(swap_lbl, &lv_font_montserrat_14, LV_PART_MAIN);
+    lv_obj_center(swap_lbl);
 
     // Reverse event field
     lv_obj_t *reverse_col = lv_obj_create(form_row);
-    lv_obj_set_size(reverse_col, 220, LV_SIZE_CONTENT);
+    lv_obj_set_size(reverse_col, 200, LV_SIZE_CONTENT);
     lv_obj_set_style_bg_opa(reverse_col, LV_OPA_TRANSP, LV_PART_MAIN);
     lv_obj_set_style_border_width(reverse_col, 0, LV_PART_MAIN);
     lv_obj_set_style_pad_all(reverse_col, 0, LV_PART_MAIN);
@@ -379,7 +423,7 @@ void ui_create_add_turnout_tab(lv_obj_t *parent)
     lv_textarea_set_one_line(s_reverse_ta, true);
     lv_textarea_set_max_length(s_reverse_ta, 23);
     lv_textarea_set_placeholder_text(s_reverse_ta, "XX.XX.XX.XX.XX.XX.XX.XX");
-    lv_obj_set_width(s_reverse_ta, 210);
+    lv_obj_set_width(s_reverse_ta, 190);
     lv_obj_add_event_cb(s_reverse_ta, ta_focus_cb, LV_EVENT_FOCUSED, NULL);
 
     // Add button

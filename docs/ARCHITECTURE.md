@@ -18,20 +18,26 @@ LCCControlPanelTouchscreen/
 │   ├── CMakeLists.txt
 │   ├── idf_component.yml     # LVGL 8.x, esp_lcd_touch, esp_jpeg
 │   ├── Kconfig.projbuild
-│   ├── main.c                # Entry point, hardware init, SD error screen
+│   ├── main.c                # Entry point, hardware init, main loop
 │   ├── lv_conf.h             # LVGL configuration (main level)
 │   ├── app/                  # Application logic
 │   │   ├── lcc_node.cpp/.h   # OpenMRN integration, event prod/consume
 │   │   ├── lcc_config.hxx    # CDI configuration (PanelConfig)
 │   │   ├── turnout_manager.c/.h  # Thread-safe turnout state management
 │   │   ├── turnout_storage.c/.h  # SD card JSON persistence + JMRI XML import
+│   │   ├── panel_layout.c/.h     # Panel layout data model (singleton + operations)
+│   │   ├── panel_storage.c/.h    # Panel layout JSON persistence to SD card
 │   │   ├── screen_timeout.c/.h   # Backlight power saving
 │   │   ├── bootloader_hal.cpp/.h # OTA bootloader support
 │   │   └── bootloader_display.c/.h # LCD status during OTA updates
 │   └── ui/                   # LVGL screens
 │       ├── ui_common.c/.h    # LVGL init, mutex, flush callbacks, data types
-│       ├── ui_main.c         # Main tabview container (Turnouts + Add Turnout)
+│       ├── ui_main.c         # Settings screen (3-tab tabview + back button)
+│       ├── ui_panel.c        # Control panel screen (default boot screen)
+│       ├── ui_panel_builder.c # Panel builder editor (drag-and-place layout editor)
+│       ├── panel_geometry.c/.h # Turnout Y-shape geometry calculations
 │       ├── ui_turnouts.c     # Turnout switchboard grid (color-coded tiles, inline edit/delete)
+│       ├── ui_splash.c       # Boot splash screen (JPEG decode) + SD card error screen
 │       └── ui_add_turnout.c  # Manual turnout entry + event discovery
 ├── sdcard/                   # SD card template files
 │   ├── nodeid.txt            # LCC node ID
@@ -77,11 +83,17 @@ LCCControlPanelTouchscreen/
 ### Application State
 
 ```
-BOOT → SPLASH → LCC_INIT → MAIN_UI
+BOOT → SPLASH → LCC_INIT → PANEL_SCREEN
          ↓          ↓
      (timeout)  (timeout)
          ↓          ↓
-      MAIN_UI ← MAIN_UI (degraded)
+   PANEL_SCREEN ← PANEL_SCREEN (degraded)
+
+PANEL_SCREEN ──(settings gear)──→ SETTINGS_SCREEN
+                                  │ Turnouts tab
+                                  │ Add Turnout tab
+                                  │ Panel Builder tab
+                                  └──(back button)──→ PANEL_SCREEN
 ```
 
 ### Turnout State
@@ -244,8 +256,27 @@ state_change_callback(index, new_state)
 lv_async_call(ui_turnouts_update_tile_async, packed_data)
      │
      ▼
-LVGL task unpacks index+state, updates tile color
+LVGL task unpacks index+state, updates tile color and panel diagram
 ```
+
+### Screen Transition Safety
+
+The application uses a single `lv_scr_act()` screen, rebuilt on each transition.
+`lv_obj_clean(scr)` destroys all child LVGL objects, but static pointer arrays
+(e.g., `s_tiles[]` in ui_turnouts.c, `s_item_lines[]` in ui_panel.c) would retain
+dangling pointers. Async callbacks from the LCC thread could then access freed memory.
+
+**Solution**: Each screen module provides an `invalidate()` function that NULLs out
+all tracked LVGL pointers and resets counters. These are called at the start of
+the *opposite* screen's creation, before `lv_obj_clean()`:
+
+```
+ui_create_panel_screen()   → calls ui_turnouts_invalidate()
+ui_create_settings_screen() → calls ui_panel_invalidate()
+```
+
+This ensures that async state-change callbacks (`ui_turnouts_update_tile`,
+`ui_panel_update_turnout`) safely no-op when the target objects no longer exist.
 
 ### Stale Detection
 
@@ -358,3 +389,130 @@ feedback during firmware updates:
 
 The display uses direct framebuffer rendering with an embedded 8x8 bitmap font,
 avoiding the overhead of LVGL during the update process.
+
+---
+
+## 9. Panel Layout Data Model
+
+### Overview
+
+The `panel_layout` module (`app/panel_layout.h`, `app/panel_layout.c`) is a pure
+data model that owns the control panel's layout state as a singleton. It provides
+query and mutation operations without any UI dependencies, enabling clean separation
+between the data layer and the LVGL rendering code.
+
+### Data Types
+
+| Type | Description |
+|------|-------------|
+| `panel_item_t` | A placed turnout: position (x, y), grid coords, turnout index, rotation, mirror flag |
+| `panel_endpoint_t` | Track endpoint on a turnout: item index, point type (NORMAL/REVERSE/ROOT) |
+| `panel_track_t` | Track segment connecting two endpoints |
+| `panel_layout_t` | Top-level container: arrays of items, endpoints, tracks + counts |
+
+### Constants
+
+| Constant | Value | Rationale |
+|----------|-------|-----------|
+| `PANEL_MAX_ITEMS` | 50 | Max placed turnouts — keeps BSS under RGB LCD DMA budget |
+| `PANEL_MAX_ENDPOINTS` | 20 | Max track endpoints |
+| `PANEL_MAX_TRACKS` | 100 | Max track segments |
+| `PANEL_GRID_SIZE` | 20 | Snap grid for placement (pixels) |
+
+### API
+
+| Function | Purpose |
+|----------|---------|
+| `panel_layout_get()` | Return pointer to the singleton layout |
+| `panel_layout_is_empty()` | True if no items placed |
+| `panel_layout_is_turnout_placed()` | Check if a turnout index is already on the panel |
+| `panel_layout_find_item()` | Find item by event_normal key |
+| `panel_layout_resolve_track()` | Resolve a track segment to pixel coordinates via geometry |
+| `panel_layout_get_bounds()` | Compute bounding box of all placed items |
+| `panel_layout_add_item()` | Place a turnout on the panel |
+| `panel_layout_add_endpoint()` | Add a track endpoint |
+| `panel_layout_add_track()` | Connect two endpoints with a track segment |
+| `panel_layout_remove_item()` | Remove a turnout and cascade-delete its endpoints and tracks |
+| `panel_layout_remove_endpoint()` | Remove an endpoint and its connected tracks |
+| `panel_layout_remove_track()` | Remove a single track segment |
+
+### Ownership & Dependencies
+
+```
+panel_layout.h  ← panel_storage.h (serialize/deserialize)
+       ↑        ← panel_geometry.h (Y-shape point calculations)
+       ↑        ← ui_panel.c (read layout for rendering)
+       ↑        ← ui_panel_builder.c (read/write layout during editing)
+       ↑        ← main.c (check is_empty at boot)
+```
+
+The module has **no** dependencies on LVGL or any UI code.
+
+---
+
+## 10. Panel Screen & Builder
+
+### Panel Screen (`ui_panel.c`)
+
+The control panel screen is the **default boot screen**. It displays:
+- A header bar with the node ID and a settings gear icon button
+- The panel diagram: placed turnout Y-shapes with color-coded state (green=closed,
+  red=thrown, grey=unknown) and track segments connecting them
+- Tap a turnout to toggle its state (sends LCC event)
+
+**Auto-Fit Scaling:** The panel renderer computes the bounding box of all placed
+items and endpoints, then calculates a uniform scale factor and center offset to
+maximize the layout within the 800×440 canvas area. A 20px margin prevents items
+from touching the edges. Line widths and hitbox sizes scale proportionally, with
+minimums enforced (2px lines, 40×30 hitboxes) for visibility and touch targets.
+
+If the panel layout is empty, the screen redirects to the settings screen on boot.
+
+### Panel Builder (`ui_panel_builder.c`)
+
+The builder is a tab within the settings screen. It provides a WYSIWYG editor for
+designing the control panel layout:
+
+**Toolbar (left sidebar):**
+- Zoom in/out buttons (0.5× to 2.0× scale)
+- Pan (4-directional) and Home (auto-center) buttons — grouped at bottom of sidebar
+- Mode buttons: Place Turnout, Place Endpoint, Delete, Save
+
+**Canvas:**
+- 800×440 pixel drawing area with grid snapping (20px)
+- Placed turnouts rendered as Y-shapes with rotation/mirror support
+- Track endpoints shown as red circles, track segments as white lines
+- Drag to reposition items, tap to select
+
+**Operations:**
+- Place turnout from roller (filtered to unplaced turnouts only)
+- Place track endpoints on turnout connection points (Normal/Reverse/Root)
+- Auto-connect endpoints to form track segments
+- Delete items with cascade removal of connected endpoints/tracks
+- Auto-center view to fit all placed items
+- Save layout to `/sdcard/panel.json` via `panel_storage`
+
+### Panel Storage (`panel_storage.h/.c`)
+
+Persists the panel layout to `/sdcard/panel.json` as a JSON file using cJSON.
+Loaded at startup before UI creation; saved explicitly when the user taps "Save"
+in the builder. Writes use a `.tmp` + rename pattern for atomicity.
+
+**SD Card Retry:** Both `panel_storage_save()` and `turnout_storage_save()` retry
+file opens up to 3 times with 100ms delays. SPI-mode SD cards can timeout
+(`ESP_ERR_TIMEOUT` / 0x107) after idle periods when the card enters low-power
+state; the retry allows it to wake up on the second attempt.
+
+### Panel Geometry (`panel_geometry.h/.c`)
+
+Calculates the three connection points of a turnout Y-shape given its position,
+rotation angle, and mirror flag. Used by both the panel renderer and the track
+endpoint resolution logic (`panel_layout_resolve_track`).
+
+**Base shape** (rotation=0, mirrored=false) in local pixel coordinates:
+- Entry: (0, 0)
+- Normal: (60, 0) — colinear with entry
+- Reverse: (40, −40) — diverges at 45°, spans 2 grid spacings vertically
+
+The reverse leg is sized so that diverging tracks align exactly with the 20px
+snap grid (2 × `PANEL_GRID_SIZE` = 40px vertical offset).

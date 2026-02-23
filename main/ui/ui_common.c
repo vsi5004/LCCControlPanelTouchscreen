@@ -99,9 +99,9 @@ static void lvgl_task(void *arg)
 
     while (1) {
         // Lock mutex
-        if (xSemaphoreTake(s_lvgl_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        if (xSemaphoreTakeRecursive(s_lvgl_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
             uint32_t task_delay_ms = lv_timer_handler();
-            xSemaphoreGive(s_lvgl_mutex);
+            xSemaphoreGiveRecursive(s_lvgl_mutex);
             
             // Clamp delay
             if (task_delay_ms > UI_LVGL_TASK_MAX_DELAY_MS) {
@@ -127,8 +127,8 @@ esp_err_t ui_init(lv_disp_t **disp, lv_indev_t **touch_indev)
     
     ESP_LOGI(TAG, "Initializing LVGL");
 
-    // Create mutex
-    s_lvgl_mutex = xSemaphoreCreateMutex();
+    // Create mutex (recursive so ui_lock works from LVGL callbacks)
+    s_lvgl_mutex = xSemaphoreCreateRecursiveMutex();
     ESP_RETURN_ON_FALSE(s_lvgl_mutex != NULL, ESP_ERR_NO_MEM, TAG, "Failed to create mutex");
 
     // Initialize LVGL
@@ -206,12 +206,12 @@ bool ui_lock(void)
     if (s_lvgl_mutex == NULL) {
         return false;
     }
-    return xSemaphoreTake(s_lvgl_mutex, portMAX_DELAY) == pdTRUE;
+    return xSemaphoreTakeRecursive(s_lvgl_mutex, portMAX_DELAY) == pdTRUE;
 }
 
 void ui_unlock(void)
 {
     if (s_lvgl_mutex != NULL) {
-        xSemaphoreGive(s_lvgl_mutex);
+        xSemaphoreGiveRecursive(s_lvgl_mutex);
     }
 }

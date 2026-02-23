@@ -22,9 +22,15 @@
 #include "turnout_storage.h"
 #include "cJSON.h"
 #include "esp_log.h"
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
+
+/** @brief Max attempts for SD card file open (card may need wake-up) */
+#define SD_OPEN_MAX_RETRIES  3
+#define SD_OPEN_RETRY_MS     100
 
 static const char *TAG = "turnout_storage";
 
@@ -227,10 +233,18 @@ esp_err_t turnout_storage_save(const turnout_t *turnouts, size_t count)
     cJSON_Delete(root);
     if (!json_str) return ESP_ERR_NO_MEM;
 
-    FILE *f = fopen(TURNOUT_STORAGE_PATH, "w");
+    FILE *f = NULL;
+    for (int attempt = 0; attempt < SD_OPEN_MAX_RETRIES; attempt++) {
+        f = fopen(TURNOUT_STORAGE_PATH, "w");
+        if (f) break;
+        ESP_LOGW(TAG, "SD card open failed (attempt %d/%d), retrying...",
+                 attempt + 1, SD_OPEN_MAX_RETRIES);
+        vTaskDelay(pdMS_TO_TICKS(SD_OPEN_RETRY_MS));
+    }
     if (!f) {
         cJSON_free(json_str);
-        ESP_LOGE(TAG, "Failed to open %s for writing", TURNOUT_STORAGE_PATH);
+        ESP_LOGE(TAG, "Failed to open %s for writing after %d attempts",
+                 TURNOUT_STORAGE_PATH, SD_OPEN_MAX_RETRIES);
         return ESP_FAIL;
     }
 

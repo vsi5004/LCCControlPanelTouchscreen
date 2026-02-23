@@ -190,6 +190,44 @@ Rules:
 - Writes must be atomic (full file rewrite)
 - Version mismatches must be detected
 
+### File: `panel.json` (SD Card)
+
+Stores the control panel layout (placed turnouts, track endpoints, track segments).
+Turnouts are keyed by their `event_normal` ID (dotted hex string), not array index.
+
+```json
+{
+  "version": 1,
+  "items": [
+    {
+      "event_normal": "05.01.01.01.22.60.00.00",
+      "grid_x": 10,
+      "grid_y": 5,
+      "rotation": 0,
+      "mirrored": false
+    }
+  ],
+  "endpoints": [
+    { "id": 1, "grid_x": 15, "grid_y": 5 }
+  ],
+  "next_endpoint_id": 2,
+  "tracks": [
+    {
+      "from": "05.01.01.01.22.60.00.00",
+      "from_point": "entry",
+      "to": "endpoint:1",
+      "to_point": "entry"
+    }
+  ]
+}
+```
+
+Rules:
+- Loaded at startup after turnouts.json
+- Saved explicitly by user via the "Save" button in the Panel Builder
+- Maximum items/endpoints/tracks governed by `PANEL_MAX_ITEMS` (50),
+  `PANEL_MAX_ENDPOINTS` (20), `PANEL_MAX_TRACKS` (100)
+
 ---
 
 ## 6. Functional Requirements
@@ -205,7 +243,8 @@ Initialize OpenMRN using Node ID from SD card `/sdcard/nodeid.txt`.
 AC: Node visible on LCC network with configured ID.
 
 #### FR-003
-Transition to main UI within 5 s of LCC readiness or timeout.
+Transition to the panel screen (control panel view) within 5 s of LCC readiness
+or timeout. If the panel layout is empty, redirect to the settings screen instead.
 
 #### FR-004
 If SD card is not detected at boot, display error screen with:
@@ -235,11 +274,18 @@ On boot, query all registered turnout positions:
 
 AC: Turnout tiles reflect current positions within a few seconds of boot.
 
-### Main UI
+### Screen Layout
 
 #### FR-010
-Provide two tabs: Turnouts (left) and Add Turnout (right).
-Turnouts tab is the default tab shown on startup.
+The application has two screens:
+- **Panel Screen** (default boot screen): Live control panel diagram showing placed
+  turnouts as Y-shapes with color-coded state and track segments. Header bar with
+  node ID and a settings gear icon for navigation to the settings screen.
+- **Settings Screen**: Three-tab tabview (Turnouts, Add Turnout, Panel Builder)
+  with a back button to return to the panel screen.
+
+AC: Panel screen shown on boot (or settings screen if layout is empty). Settings
+gear navigates to settings. Back button returns to panel.
 
 ### Turnout Switchboard
 
@@ -269,22 +315,32 @@ Mark turnouts as STALE when no state update received within configurable timeout
 AC: Tile turns red after stale timeout expires without any state update.
 
 #### FR-024
-Provide inline rename for each turnout via an edit icon button on the tile:
-- Tapping the edit icon opens a full-screen modal with a text input pre-filled with the current name
-- On-screen keyboard for editing
+Provide an "Edit Turnout" dialog via the edit icon button on each tile:
+- Tapping the edit icon opens a full-screen modal with:
+  - A text input pre-filled with the current turnout name
+  - A "Flip Polarity" button (amber, with refresh icon) that swaps the Normal
+    and Reverse event IDs. If the turnout is placed on the panel, the panel
+    layout item's `event_normal` key is updated accordingly. LCC event
+    registrations are refreshed and both turnouts.json and panel.json are saved.
+  - Save and Cancel buttons
+- On-screen keyboard for name editing
 - Save persists the new name to SD card and updates the tile label
 - Cancel closes the modal without changes
 
 AC: Renamed turnout is saved to turnouts.json and tile label updates immediately.
+Flipped turnout has swapped event IDs, updated panel key, and re-registered LCC events.
 
 #### FR-025
 Provide inline delete for each turnout via a trash icon button on the tile:
 - Tapping the trash icon opens a confirmation dialog with warning styling
 - Dialog shows turnout name and "This action cannot be undone" message
-- Confirm removes the turnout, unregisters its LCC events, saves to SD card, and refreshes the grid
+- Confirm removes the turnout, unregisters its LCC events, removes any matching
+  panel layout item (cascade-deleting connected tracks), saves both turnouts.json
+  and panel.json, and refreshes the grid
 - Cancel closes the dialog without changes
 
-AC: Deleted turnout is removed from turnouts.json and disappears from the grid.
+AC: Deleted turnout is removed from turnouts.json, its panel item (if any) is
+removed from panel.json, and it disappears from the grid.
 
 #### FR-026
 Support JMRI roster.xml import:
@@ -302,6 +358,8 @@ AC: Turnouts defined in JMRI roster.xml appear on the Turnouts tab after reboot 
 Provide manual turnout entry form with:
 - Name text input
 - Normal Event ID text input (dotted hex format)
+- Swap button (amber, between Normal and Reverse fields) to swap the contents
+  of the two event ID fields before adding
 - Reverse Event ID text input (dotted hex format)
 - On-screen keyboard for text entry
 - Add button to save turnout
@@ -315,6 +373,45 @@ Provide discovery mode toggle:
 - User can select events from the list to populate the form
 
 AC: Events seen on bus appear in discovery list within 1 second.
+
+### Panel Screen
+
+#### FR-040
+Display placed turnouts as Y-shape symbols with color-coded state:
+- Green = Closed (Normal), Red = Thrown (Reverse), Grey = Unknown/Stale
+- Track segments drawn between connected endpoints
+- Layout auto-scaled and centered to fill the 800×440 canvas area with 20px margins
+- Line widths and touch hitbox sizes scale proportionally (minimum 2px / 40×30)
+- Tapping a turnout Y-shape toggles its state (same logic as FR-021)
+
+AC: All placed turnouts visible with correct colors, maximally sized; tap toggles state.
+
+#### FR-041
+Update turnout colors on the panel screen in real-time as LCC events arrive.
+AC: Color changes within one LVGL refresh cycle.
+
+### Panel Builder
+
+#### FR-042
+Provide a WYSIWYG editor (Panel Builder tab in settings) for designing the
+control panel layout, with:
+- Left sidebar: zoom controls (0.5×–2.0×), pan/home buttons (bottom-aligned),
+  mode buttons (Place Turnout, Place Endpoint, Delete, Save)
+- Canvas area: 800×440 pixels with 20px grid snapping
+- Place turnouts from a roller filtered to unplaced turnouts only
+- Place track endpoints on turnout connection points (Normal/Reverse/Root)
+- Auto-connect endpoints to form track segments
+- Drag to reposition placed items
+- Delete with cascade removal of connected endpoints and tracks
+- Auto-center view to fit all placed items
+
+AC: Layout designed in builder matches what appears on the panel screen.
+
+#### FR-043
+Save the panel layout to `/sdcard/panel.json` when the user taps "Save".
+Load the layout from SD card at startup.
+
+AC: Layout persists across reboots.
 
 ### CAN Rate Limiting
 
@@ -370,6 +467,7 @@ AC: Firmware update progress visible in serial monitor.
 ## 7. Non-Functional Requirements
 - UI must not block > 50 ms
 - Turnout file save must be power-loss safe
+- SD card writes must retry on timeout (up to 3 attempts with 100ms delay)
 - CAN disconnect must not require reboot
 - Maximum 150 turnouts supported
 - State updates must reach UI within one LVGL refresh cycle
