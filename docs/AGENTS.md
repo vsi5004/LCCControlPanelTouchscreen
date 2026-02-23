@@ -21,6 +21,29 @@
 | Firmware Update | ✓ Complete | OTA via LCC Memory Config Protocol, JMRI compatible |
 | Inline Edit/Delete | ✓ Complete | Edit (rename + flip polarity) and delete turnouts from tile icons |
 
+### Recent Changes (Session 2026-02-23b)
+- Refactored `panel_track_t` from 8-field flat struct to tagged-union `panel_ref_t`
+  references (`{type, id, point}` with `PANEL_REF_TURNOUT` / `PANEL_REF_ENDPOINT`).
+  Updated panel_layout.c, panel_storage.c, ui_panel_builder.c, and ui_panel.c.
+  JSON format now uses `"turnout:N"` / `"endpoint:N"` string references.
+  Design is extensible for future element types (signals, crossings, etc.)
+- Performance: builder canvas refresh now uses `lv_obj_clean()` bulk delete
+  instead of per-object `lv_obj_del()` loop, with drag-hitbox reparenting
+- Performance: batch turnout lookups in ui_panel.c and ui_panel_builder.c —
+  single mutex lock/unlock with `turnout_manager_get_all()` replaces N
+  individual `find_by_id()` calls per render
+- Performance: `ui_panel_update_turnout()` now breaks early after matching item
+- Performance: LVGL heap bumped from 64KB to 96KB (`LV_MEM_SIZE`) for builder
+  object churn headroom
+- Performance: `s_turnouts` array (10.8KB) moved to PSRAM via
+  `heap_caps_calloc(MALLOC_CAP_SPIRAM)` with internal RAM fallback
+- Performance: added hint cache (`s_last_hit`) in `panel_layout_resolve_track()`
+  to skip linear scans on consecutive lookups for the same turnout
+- Performance: disabled unused font Montserrat 20 (~30KB flash savings)
+- Performance: disabled 10 unused LVGL widgets (ARC, BAR, CANVAS, CHECKBOX,
+  DROPDOWN, IMG, ROLLER, SLIDER, SWITCH, TABLE) — ~20-40KB flash savings
+- Updated all documentation
+
 ### Recent Changes (Session 2026-02-22c)
 - Added polarity flip feature: `turnout_manager_flip_polarity()` swaps Normal/Reverse
   event IDs. Edit Turnout dialog (renamed from "Rename Turnout") now includes a

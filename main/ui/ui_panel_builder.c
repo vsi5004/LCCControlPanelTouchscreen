@@ -95,9 +95,8 @@ static bool s_draw_track_mode = false;      ///< Track drawing mode active
 static int  s_selected_item = -1;           ///< Currently selected placed item index (-1 = none)
 
 /// Track drawing state
-static bool     s_track_first_selected = false;
-static uint64_t s_track_from_event = 0;
-static panel_point_type_t s_track_from_point = PANEL_POINT_ENTRY;
+static bool        s_track_first_selected = false;
+static panel_ref_t s_track_from_ref = {0};     ///< "from" end of track being drawn
 
 /// Track selection state (-1 = no track selected)
 static int s_selected_track = -1;
@@ -105,10 +104,6 @@ static int s_selected_track = -1;
 /// Endpoint selection and placement state
 static int  s_selected_endpoint = -1;          ///< Selected endpoint array index (-1 = none)
 static bool s_placement_endpoint_mode = false;  ///< Waiting for tap to place endpoint
-
-/// Track drawing — "from" can be an endpoint instead of a turnout
-static bool     s_track_from_is_endpoint = false;
-static uint32_t s_track_from_endpoint_id = 0;
 
 /// Dirty flag — true when layout has unsaved changes
 static bool s_dirty = false;
@@ -210,9 +205,9 @@ static void screen_to_canvas_grid(const lv_point_t *screen_pt,
 // Helper: Check if turnout is already placed on panel
 // ============================================================================
 
-static bool is_turnout_placed(uint64_t event_normal)
+static bool is_turnout_placed(uint32_t turnout_id)
 {
-    return panel_layout_is_turnout_placed(panel_layout_get(), event_normal);
+    return panel_layout_is_turnout_placed(panel_layout_get(), turnout_id);
 }
 
 // ============================================================================
@@ -251,6 +246,7 @@ static void modal_item_click_cb(lv_event_t *e)
 
     modal_close();
     builder_refresh_toolbar();
+    builder_refresh_canvas();
 }
 
 static void modal_close_btn_cb(lv_event_t *e)
@@ -331,7 +327,7 @@ static void open_turnout_modal(void)
     for (size_t i = 0; i < count; i++) {
         turnout_t t;
         if (turnout_manager_get_by_index(i, &t) != ESP_OK) continue;
-        if (is_turnout_placed(t.event_normal)) continue;
+        if (is_turnout_placed(t.id)) continue;
 
         lv_obj_t *item = lv_obj_create(list_area);
         lv_obj_set_size(item, MODAL_WIDTH - 40, MODAL_ITEM_HEIGHT);
@@ -412,7 +408,7 @@ static void canvas_click_cb(lv_event_t *e)
 
         panel_layout_t *layout = panel_layout_get();
 
-        int idx = panel_layout_add_item(layout, t.event_normal,
+        int idx = panel_layout_add_item(layout, t.id,
                                          (uint16_t)grid_x, (uint16_t)grid_y);
         if (idx < 0) {
             s_placement_mode = false;
@@ -516,30 +512,24 @@ static void placed_item_click_cb(lv_event_t *e)
             nearest = find_nearest_point(&layout->items[idx], &touch);
         }
 
-        uint64_t ev = layout->items[idx].event_normal;
+        uint32_t tid = layout->items[idx].turnout_id;
 
         if (!s_track_first_selected) {
             s_track_first_selected = true;
-            s_track_from_is_endpoint = false;
-            s_track_from_event = ev;
-            s_track_from_point = nearest;
+            s_track_from_ref = (panel_ref_t){
+                .type = PANEL_REF_TURNOUT, .id = tid, .point = nearest
+            };
             ESP_LOGI(TAG, "Track start: item %d, point %d", idx, (int)nearest);
         } else {
             // Complete the track
-            bool self_conn = !s_track_from_is_endpoint &&
-                             ev == s_track_from_event &&
-                             nearest == s_track_from_point;
+            bool self_conn = s_track_from_ref.type == PANEL_REF_TURNOUT &&
+                             tid == s_track_from_ref.id &&
+                             nearest == s_track_from_ref.point;
             if (!self_conn) {
-                panel_track_t new_track = {0};
-                if (s_track_from_is_endpoint) {
-                    new_track.from_is_endpoint = true;
-                    new_track.from_endpoint_id = s_track_from_endpoint_id;
-                } else {
-                    new_track.from_event = s_track_from_event;
-                }
-                new_track.from_point = s_track_from_point;
-                new_track.to_event = ev;
-                new_track.to_point = nearest;
+                panel_track_t new_track = {
+                    .from = s_track_from_ref,
+                    .to   = { .type = PANEL_REF_TURNOUT, .id = tid, .point = nearest }
+                };
                 if (panel_layout_add_track(layout, &new_track)) {
                     s_dirty = true;
                 }
@@ -648,29 +638,23 @@ static void conn_point_click_cb(lv_event_t *e)
     panel_layout_t *layout = panel_layout_get();
     if (item_idx < 0 || (size_t)item_idx >= layout->item_count) return;
 
-    uint64_t ev = layout->items[item_idx].event_normal;
+    uint32_t tid = layout->items[item_idx].turnout_id;
 
     if (!s_track_first_selected) {
         s_track_first_selected = true;
-        s_track_from_is_endpoint = false;
-        s_track_from_event = ev;
-        s_track_from_point = pt;
+        s_track_from_ref = (panel_ref_t){
+            .type = PANEL_REF_TURNOUT, .id = tid, .point = pt
+        };
         ESP_LOGI(TAG, "Track start: item %d, point %d", item_idx, (int)pt);
         builder_refresh_canvas();
     } else {
         // Complete the track
-        if (ev != s_track_from_event || pt != s_track_from_point ||
-            s_track_from_is_endpoint) {
-            panel_track_t new_track = {0};
-            if (s_track_from_is_endpoint) {
-                new_track.from_is_endpoint = true;
-                new_track.from_endpoint_id = s_track_from_endpoint_id;
-            } else {
-                new_track.from_event = s_track_from_event;
-            }
-            new_track.from_point = s_track_from_point;
-            new_track.to_event = ev;
-            new_track.to_point = pt;
+        if (tid != s_track_from_ref.id || pt != s_track_from_ref.point ||
+            s_track_from_ref.type != PANEL_REF_TURNOUT) {
+            panel_track_t new_track = {
+                .from = s_track_from_ref,
+                .to   = { .type = PANEL_REF_TURNOUT, .id = tid, .point = pt }
+            };
             if (panel_layout_add_track(layout, &new_track)) {
                 s_dirty = true;
             }
@@ -724,28 +708,20 @@ static void placed_endpoint_click_cb(lv_event_t *e)
     if (s_draw_track_mode) {
         if (!s_track_first_selected) {
             s_track_first_selected = true;
-            s_track_from_is_endpoint = true;
-            s_track_from_endpoint_id = ep->id;
-            s_track_from_event = 0;
-            s_track_from_point = PANEL_POINT_ENTRY;
+            s_track_from_ref = (panel_ref_t){
+                .type = PANEL_REF_ENDPOINT, .id = ep->id, .point = PANEL_POINT_ENTRY
+            };
             ESP_LOGI(TAG, "Track start: endpoint %u", (unsigned)ep->id);
             builder_refresh_canvas();
         } else {
             // Complete track to this endpoint
-            bool self_conn = s_track_from_is_endpoint &&
-                             s_track_from_endpoint_id == ep->id;
+            bool self_conn = s_track_from_ref.type == PANEL_REF_ENDPOINT &&
+                             s_track_from_ref.id == ep->id;
             if (!self_conn) {
-                panel_track_t new_track = {0};
-                if (s_track_from_is_endpoint) {
-                    new_track.from_is_endpoint = true;
-                    new_track.from_endpoint_id = s_track_from_endpoint_id;
-                } else {
-                    new_track.from_event = s_track_from_event;
-                }
-                new_track.from_point = s_track_from_point;
-                new_track.to_is_endpoint = true;
-                new_track.to_endpoint_id = ep->id;
-                new_track.to_point = PANEL_POINT_ENTRY;
+                panel_track_t new_track = {
+                    .from = s_track_from_ref,
+                    .to   = { .type = PANEL_REF_ENDPOINT, .id = ep->id, .point = PANEL_POINT_ENTRY }
+                };
                 if (panel_layout_add_track(layout, &new_track)) {
                     s_dirty = true;
                 }
@@ -1143,17 +1119,23 @@ static void auto_center_cb(lv_event_t *e)
 
 static void builder_clear_canvas(void)
 {
-    for (size_t i = 0; i < s_preview_obj_count; i++) {
-        if (s_preview_objs[i]) {
-            // Don't delete the hitbox that is actively being dragged
-            if (s_preview_objs[i] == s_drag_active_hitbox) {
-                s_preview_objs[i] = NULL;
-                continue;
-            }
-            lv_obj_del(s_preview_objs[i]);
-            s_preview_objs[i] = NULL;
-        }
+    if (!s_canvas) return;
+
+    if (s_drag_active_hitbox) {
+        /* Reparent the in-flight drag hitbox so lv_obj_clean() won't destroy it */
+        lv_obj_set_parent(s_drag_active_hitbox, lv_layer_top());
+        lv_obj_add_flag(s_drag_active_hitbox, LV_OBJ_FLAG_HIDDEN);
     }
+
+    /* Bulk-delete all canvas children (much faster than per-object lv_obj_del) */
+    lv_obj_clean(s_canvas);
+
+    if (s_drag_active_hitbox) {
+        /* Move the hitbox back — builder_refresh_canvas() will reposition it */
+        lv_obj_set_parent(s_drag_active_hitbox, s_canvas);
+        lv_obj_clear_flag(s_drag_active_hitbox, LV_OBJ_FLAG_HIDDEN);
+    }
+
     s_preview_obj_count = 0;
 }
 
@@ -1186,6 +1168,27 @@ static void builder_refresh_canvas(void)
     int16_t hb_h = (int16_t)((int32_t)PLACED_HITBOX_H * s_zoom_pct / 100);
     if (hb_w < 20) hb_w = 20;
     if (hb_h < 16) hb_h = 16;
+
+    // Snapshot turnout names under a single lock (#2: batch lookups)
+    static char s_tn_names[PANEL_MAX_ITEMS][32];
+    static bool s_tn_found[PANEL_MAX_ITEMS];
+    {
+        turnout_manager_lock();
+        const turnout_t *turnouts;
+        size_t turnout_count;
+        turnout_manager_get_all(&turnouts, &turnout_count);
+        for (size_t i = 0; i < layout->item_count && i < PANEL_MAX_ITEMS; i++) {
+            s_tn_found[i] = false;
+            for (size_t j = 0; j < turnout_count; j++) {
+                if (turnouts[j].id == layout->items[i].turnout_id) {
+                    memcpy(s_tn_names[i], turnouts[j].name, sizeof(turnouts[j].name));
+                    s_tn_found[i] = true;
+                    break;
+                }
+            }
+        }
+        turnout_manager_unlock();
+    }
 
     // Draw placed items
     for (size_t i = 0; i < layout->item_count && i < PANEL_MAX_ITEMS; i++) {
@@ -1288,9 +1291,9 @@ static void builder_refresh_canvas(void)
 
                 // Highlight the first-selected point in track draw mode
                 if (s_draw_track_mode && s_track_first_selected &&
-                    !s_track_from_is_endpoint &&
-                    pi->event_normal == s_track_from_event &&
-                    pt_types[p] == s_track_from_point) {
+                    s_track_from_ref.type == PANEL_REF_TURNOUT &&
+                    pi->turnout_id == s_track_from_ref.id &&
+                    pt_types[p] == s_track_from_ref.point) {
                     lv_obj_set_style_bg_color(dot, lv_color_hex(COLOR_CONN_ACTIVE), LV_PART_MAIN);
                     ds = ds + ds / 3;  // ~33% larger for highlight
                 }
@@ -1310,86 +1313,18 @@ static void builder_refresh_canvas(void)
         }
 
         // Turnout name label (small, above the symbol)
-        int tm_idx = turnout_manager_find_by_event(pi->event_normal);
-        if (tm_idx >= 0) {
-            turnout_t t;
-            if (turnout_manager_get_by_index((size_t)tm_idx, &t) == ESP_OK) {
-                lv_obj_t *name_lbl = lv_label_create(s_canvas);
-                lv_label_set_text(name_lbl, t.name);
-                lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_12, LV_PART_MAIN);
-                lv_obj_set_style_text_color(name_lbl, lv_color_hex(0xBBBBBB), LV_PART_MAIN);
-                lv_obj_set_pos(name_lbl, vcx - 30, vcy - hb_h / 2 - 14);
-                add_preview_obj(name_lbl);
-            }
+        if (s_tn_found[i]) {
+            lv_obj_t *name_lbl = lv_label_create(s_canvas);
+            lv_label_set_text(name_lbl, s_tn_names[i]);
+            lv_obj_set_style_text_font(name_lbl, &lv_font_montserrat_12, LV_PART_MAIN);
+            lv_obj_set_style_text_color(name_lbl, lv_color_hex(0xBBBBBB), LV_PART_MAIN);
+            lv_obj_set_pos(name_lbl, vcx - 30, vcy - hb_h / 2 - 14);
+            add_preview_obj(name_lbl);
         }
     }
 
-    // Draw endpoints
-    for (size_t i = 0; i < layout->endpoint_count && i < PANEL_MAX_ENDPOINTS; i++) {
-        const panel_endpoint_t *ep = &layout->endpoints[i];
-
-        int16_t wx = (int16_t)(ep->grid_x * PANEL_GRID_SIZE);
-        int16_t wy = (int16_t)(ep->grid_y * PANEL_GRID_SIZE);
-        int16_t vx = world_to_view_x(wx);
-        int16_t vy = world_to_view_y(wy);
-
-        bool ep_selected = ((int)i == s_selected_endpoint);
-
-        // Dot size scales with zoom; larger in draw mode for easier tapping
-        int base_dot = s_draw_track_mode ? 20 : 14;
-        int dot_sz = (int)((int32_t)base_dot * s_zoom_pct / 100);
-        if (dot_sz < 8) dot_sz = 8;
-
-        lv_color_t dot_color = ep_selected ? lv_color_hex(COLOR_SELECTED)
-                                           : lv_color_hex(COLOR_ENDPOINT);
-
-        // Highlight the first-selected endpoint in track draw mode
-        if (s_draw_track_mode && s_track_first_selected &&
-            s_track_from_is_endpoint && s_track_from_endpoint_id == ep->id) {
-            dot_color = lv_color_hex(COLOR_CONN_ACTIVE);
-            dot_sz = dot_sz + dot_sz / 3;
-        }
-
-        lv_obj_t *dot = lv_obj_create(s_canvas);
-        lv_obj_remove_style_all(dot);
-        lv_obj_set_style_bg_color(dot, dot_color, LV_PART_MAIN);
-        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, LV_PART_MAIN);
-        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
-        lv_obj_set_style_border_width(dot, 2, LV_PART_MAIN);
-        lv_obj_set_style_border_color(dot,
-            ep_selected ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x000000), LV_PART_MAIN);
-        lv_obj_set_size(dot, dot_sz, dot_sz);
-        lv_obj_set_pos(dot, vx - dot_sz / 2, vy - dot_sz / 2);
-        add_preview_obj(dot);
-
-        // Hitbox for click/drag
-        int16_t ep_hb = (int16_t)((int32_t)30 * s_zoom_pct / 100);
-        if (ep_hb < 20) ep_hb = 20;
-
-        if (s_drag_active_hitbox && s_drag_active_is_endpoint && s_drag_active_idx == (int)i) {
-            lv_obj_set_size(s_drag_active_hitbox, ep_hb, ep_hb);
-            lv_obj_set_pos(s_drag_active_hitbox, vx - ep_hb / 2, vy - ep_hb / 2);
-            add_preview_obj(s_drag_active_hitbox);
-        } else {
-            lv_obj_t *hitbox = lv_obj_create(s_canvas);
-            lv_obj_remove_style_all(hitbox);
-            lv_obj_set_size(hitbox, ep_hb, ep_hb);
-            lv_obj_set_pos(hitbox, vx - ep_hb / 2, vy - ep_hb / 2);
-            lv_obj_add_flag(hitbox, LV_OBJ_FLAG_CLICKABLE);
-            lv_obj_clear_flag(hitbox, LV_OBJ_FLAG_SCROLLABLE);
-            lv_obj_add_event_cb(hitbox, placed_endpoint_click_cb, LV_EVENT_CLICKED,
-                               (void *)(uintptr_t)i);
-            lv_obj_add_event_cb(hitbox, placed_endpoint_drag_cb, LV_EVENT_PRESSING,
-                               (void *)(uintptr_t)i);
-            lv_obj_add_event_cb(hitbox, placed_endpoint_release_cb, LV_EVENT_RELEASED,
-                               (void *)(uintptr_t)i);
-            lv_obj_add_event_cb(hitbox, placed_endpoint_release_cb, LV_EVENT_PRESS_LOST,
-                               (void *)(uintptr_t)i);
-            add_preview_obj(hitbox);
-        }
-    }
-
-    // Draw track segments
+    // Draw track segments BEFORE endpoints so that endpoint/turnout hitboxes
+    // have higher z-order and receive touch priority over track hitboxes.
     for (size_t i = 0; i < layout->track_count && i < PANEL_MAX_TRACKS; i++) {
         const panel_track_t *pt = &layout->tracks[i];
 
@@ -1448,7 +1383,72 @@ static void builder_refresh_canvas(void)
         }
     }
 
-    // Show placement hint
+    // Draw endpoints AFTER tracks so their hitboxes have higher z-priority
+    for (size_t i = 0; i < layout->endpoint_count && i < PANEL_MAX_ENDPOINTS; i++) {
+        const panel_endpoint_t *ep = &layout->endpoints[i];
+
+        int16_t wx = (int16_t)(ep->grid_x * PANEL_GRID_SIZE);
+        int16_t wy = (int16_t)(ep->grid_y * PANEL_GRID_SIZE);
+        int16_t vx = world_to_view_x(wx);
+        int16_t vy = world_to_view_y(wy);
+
+        bool ep_selected = ((int)i == s_selected_endpoint);
+
+        // Dot size scales with zoom; larger in draw mode for easier tapping
+        int base_dot = s_draw_track_mode ? 20 : 14;
+        int dot_sz = (int)((int32_t)base_dot * s_zoom_pct / 100);
+        if (dot_sz < 8) dot_sz = 8;
+
+        lv_color_t dot_color = ep_selected ? lv_color_hex(COLOR_SELECTED)
+                                           : lv_color_hex(COLOR_ENDPOINT);
+
+        // Highlight the first-selected endpoint in track draw mode
+        if (s_draw_track_mode && s_track_first_selected &&
+            s_track_from_ref.type == PANEL_REF_ENDPOINT && s_track_from_ref.id == ep->id) {
+            dot_color = lv_color_hex(COLOR_CONN_ACTIVE);
+            dot_sz = dot_sz + dot_sz / 3;
+        }
+
+        lv_obj_t *dot = lv_obj_create(s_canvas);
+        lv_obj_remove_style_all(dot);
+        lv_obj_set_style_bg_color(dot, dot_color, LV_PART_MAIN);
+        lv_obj_set_style_bg_opa(dot, LV_OPA_COVER, LV_PART_MAIN);
+        lv_obj_set_style_radius(dot, LV_RADIUS_CIRCLE, LV_PART_MAIN);
+        lv_obj_set_style_border_width(dot, 2, LV_PART_MAIN);
+        lv_obj_set_style_border_color(dot,
+            ep_selected ? lv_color_hex(0xFFFFFF) : lv_color_hex(0x000000), LV_PART_MAIN);
+        lv_obj_set_size(dot, dot_sz, dot_sz);
+        lv_obj_set_pos(dot, vx - dot_sz / 2, vy - dot_sz / 2);
+        add_preview_obj(dot);
+
+        // Hitbox for click/drag
+        int16_t ep_hb = (int16_t)((int32_t)30 * s_zoom_pct / 100);
+        if (ep_hb < 20) ep_hb = 20;
+
+        if (s_drag_active_hitbox && s_drag_active_is_endpoint && s_drag_active_idx == (int)i) {
+            lv_obj_set_size(s_drag_active_hitbox, ep_hb, ep_hb);
+            lv_obj_set_pos(s_drag_active_hitbox, vx - ep_hb / 2, vy - ep_hb / 2);
+            add_preview_obj(s_drag_active_hitbox);
+        } else {
+            lv_obj_t *hitbox = lv_obj_create(s_canvas);
+            lv_obj_remove_style_all(hitbox);
+            lv_obj_set_size(hitbox, ep_hb, ep_hb);
+            lv_obj_set_pos(hitbox, vx - ep_hb / 2, vy - ep_hb / 2);
+            lv_obj_add_flag(hitbox, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_clear_flag(hitbox, LV_OBJ_FLAG_SCROLLABLE);
+            lv_obj_add_event_cb(hitbox, placed_endpoint_click_cb, LV_EVENT_CLICKED,
+                               (void *)(uintptr_t)i);
+            lv_obj_add_event_cb(hitbox, placed_endpoint_drag_cb, LV_EVENT_PRESSING,
+                               (void *)(uintptr_t)i);
+            lv_obj_add_event_cb(hitbox, placed_endpoint_release_cb, LV_EVENT_RELEASED,
+                               (void *)(uintptr_t)i);
+            lv_obj_add_event_cb(hitbox, placed_endpoint_release_cb, LV_EVENT_PRESS_LOST,
+                               (void *)(uintptr_t)i);
+            add_preview_obj(hitbox);
+        }
+    }
+
+    // Show placement/mode hints
     if (s_placement_mode) {
         lv_obj_t *hint = lv_label_create(s_canvas);
         lv_label_set_text(hint, "Tap canvas to place turnout");
@@ -1462,6 +1462,18 @@ static void builder_refresh_canvas(void)
         lv_label_set_text(hint, "Tap canvas to place endpoint");
         lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, LV_PART_MAIN);
         lv_obj_set_style_text_color(hint, lv_color_hex(COLOR_ENDPOINT), LV_PART_MAIN);
+        lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -8);
+        add_preview_obj(hint);
+    }
+    if (s_draw_track_mode) {
+        lv_obj_t *hint = lv_label_create(s_canvas);
+        if (s_track_first_selected) {
+            lv_label_set_text(hint, "Now tap a second point to complete the track");
+        } else {
+            lv_label_set_text(hint, "Tap a connection point on a turnout or endpoint to start a track");
+        }
+        lv_obj_set_style_text_font(hint, &lv_font_montserrat_14, LV_PART_MAIN);
+        lv_obj_set_style_text_color(hint, lv_color_hex(COLOR_CONN_ACTIVE), LV_PART_MAIN);
         lv_obj_align(hint, LV_ALIGN_BOTTOM_MID, 0, -8);
         add_preview_obj(hint);
     }

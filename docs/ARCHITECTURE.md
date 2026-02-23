@@ -145,13 +145,17 @@ The following settings optimize scroll and animation performance:
 | `LV_INDEV_DEF_READ_PERIOD` | 10ms | lv_conf.h | Fast touch polling |
 | `LV_INDEV_DEF_SCROLL_THROW` | 5 | lv_conf.h | Reduced scroll momentum |
 | `LV_INDEV_DEF_SCROLL_LIMIT` | 30 | lv_conf.h | Lower scroll sensitivity |
-| `LV_MEM_CUSTOM` | 1 | sdkconfig | Use stdlib malloc (PSRAM-aware) |
+| `LV_MEM_CUSTOM` | 0 | lv_conf.h | LVGL internal allocator (not stdlib) |
+| `LV_MEM_SIZE` | 96 KB | lv_conf.h | Headroom for builder object churn |
 | `LV_MEMCPY_MEMSET_STD` | 1 | sdkconfig | Use optimized libc memory functions |
 | `LV_ATTRIBUTE_FAST_MEM` | IRAM | sdkconfig | Place critical functions in IRAM |
 
 **Additional Optimizations:**
 - LVGL task pinned to CPU1 to avoid contention with LCD DMA on CPU0
 - Fade animations for screen timeout use 20 discrete opacity steps
+- Unused font disabled (`LV_FONT_MONTSERRAT_20 0`) — saves ~30 KB flash
+- 10 unused widgets disabled (ARC, BAR, CANVAS, CHECKBOX, DROPDOWN, IMG, ROLLER, SLIDER, SWITCH, TABLE) — saves ~20-40 KB flash
+- Enabled widgets: BTN, BTNMATRIX (required by tabview), LABEL, LINE, TEXTAREA, TABVIEW
 
 ### CAN Driver
 - Uses `Esp32HardwareTwai` from OpenMRN
@@ -237,6 +241,20 @@ The `turnout_storage` module supports importing turnout definitions from a JMRI
 The turnout manager uses a FreeRTOS mutex to protect all state access. The LCC
 event handler (running on the OpenMRN executor) and the LVGL UI task both access
 turnout state through this mutex.
+
+### Memory Allocation
+
+The internal turnout array (`s_turnouts`, 150 × `sizeof(turnout_t)` ≈ 10.8 KB)
+is allocated in PSRAM via `heap_caps_calloc(MALLOC_CAP_SPIRAM)` to free internal
+SRAM for the RGB LCD DMA bounce buffers and LVGL heap. A fallback to internal
+RAM is provided if PSRAM allocation fails.
+
+### Batch Access Pattern
+
+`turnout_manager_get_all()` returns a direct pointer to the internal array.
+Callers must hold the mutex (`turnout_manager_lock()` / `turnout_manager_unlock()`)
+while accessing it. The panel screen and builder use this to snapshot all turnout
+names/states in a single lock, avoiding per-item mutex contention during rendering.
 
 ### State Update Flow
 
@@ -405,9 +423,11 @@ between the data layer and the LVGL rendering code.
 
 | Type | Description |
 |------|-------------|
-| `panel_item_t` | A placed turnout: position (x, y), grid coords, turnout index, rotation, mirror flag |
-| `panel_endpoint_t` | Track endpoint on a turnout: item index, point type (NORMAL/REVERSE/ROOT) |
-| `panel_track_t` | Track segment connecting two endpoints |
+| `panel_item_t` | A placed turnout: turnout_id (stable key), grid coords, rotation, mirror flag |
+| `panel_endpoint_t` | Free-standing track terminator with a unique auto-increment ID and grid coords |
+| `panel_ref_type_t` | Enum: `PANEL_REF_TURNOUT` or `PANEL_REF_ENDPOINT` (extensible for future element types) |
+| `panel_ref_t` | Typed reference to a connectable element: `{type, id, point}` |
+| `panel_track_t` | Track segment: `{panel_ref_t from, panel_ref_t to}` — connects any two elements |
 | `panel_layout_t` | Top-level container: arrays of items, endpoints, tracks + counts |
 
 ### Constants
@@ -448,6 +468,12 @@ panel_layout.h  ← panel_storage.h (serialize/deserialize)
 
 The module has **no** dependencies on LVGL or any UI code.
 
+### Track Resolution Optimization
+
+`panel_layout_resolve_track()` uses a static hint cache (`s_last_hit`) to skip
+linear scans when the same turnout ID is resolved consecutively. This is
+effective because tracks typically cluster around a small number of turnouts.
+
 ---
 
 ## 10. Panel Screen & Builder
@@ -467,6 +493,11 @@ from touching the edges. Line widths and hitbox sizes scale proportionally, with
 minimums enforced (2px lines, 40×30 hitboxes) for visibility and touch targets.
 
 If the panel layout is empty, the screen redirects to the settings screen on boot.
+
+**Batch State Snapshot:** During rendering, the panel screen snapshots all turnout
+states under a single mutex lock (`turnout_manager_lock()` / `get_all()` /
+`unlock()`) rather than locking per-item. This eliminates N mutex round-trips
+per frame and avoids tearing from state changes mid-render.
 
 ### Panel Builder (`ui_panel_builder.c`)
 
@@ -491,6 +522,12 @@ designing the control panel layout:
 - Delete items with cascade removal of connected endpoints/tracks
 - Auto-center view to fit all placed items
 - Save layout to `/sdcard/panel.json` via `panel_storage`
+
+**Canvas Refresh Optimization:** `builder_refresh_canvas()` uses `lv_obj_clean()`
+to bulk-destroy all child objects instead of iterating with `lv_obj_del()`. If a
+drag is in progress, the drag hitbox is temporarily reparented to `lv_layer_top()`
+before the clean and moved back afterward. Turnout names are batch-looked-up
+under a single mutex lock.
 
 ### Panel Storage (`panel_storage.h/.c`)
 

@@ -13,6 +13,7 @@
 #include "turnout_storage.h"
 #include "esp_log.h"
 #include "esp_timer.h"
+#include "esp_heap_caps.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
 #include <string.h>
@@ -25,8 +26,9 @@ static const char *TAG = "turnout_mgr";
 // Internal state
 // ============================================================================
 
-static turnout_t s_turnouts[TURNOUT_MAX_COUNT];
+static turnout_t *s_turnouts = NULL;    ///< Allocated from PSRAM to save internal SRAM
 static size_t s_count = 0;
+static uint32_t s_next_turnout_id = 1;
 static SemaphoreHandle_t s_mutex = NULL;
 static turnout_state_callback_t s_state_callback = NULL;
 
@@ -46,7 +48,22 @@ esp_err_t turnout_manager_init(void)
 
     xSemaphoreTake(s_mutex, portMAX_DELAY);
 
-    memset(s_turnouts, 0, sizeof(s_turnouts));
+    /* Allocate turnout array from PSRAM (saves ~10KB internal SRAM) */
+    if (!s_turnouts) {
+        s_turnouts = heap_caps_calloc(TURNOUT_MAX_COUNT, sizeof(turnout_t),
+                                      MALLOC_CAP_SPIRAM);
+        if (!s_turnouts) {
+            ESP_LOGW(TAG, "PSRAM alloc failed, falling back to internal RAM");
+            s_turnouts = calloc(TURNOUT_MAX_COUNT, sizeof(turnout_t));
+        }
+        if (!s_turnouts) {
+            ESP_LOGE(TAG, "Failed to allocate turnout array");
+            xSemaphoreGive(s_mutex);
+            return ESP_ERR_NO_MEM;
+        }
+    }
+
+    memset(s_turnouts, 0, TURNOUT_MAX_COUNT * sizeof(turnout_t));
     s_count = 0;
 
     size_t loaded = 0;
@@ -61,6 +78,14 @@ esp_err_t turnout_manager_init(void)
     } else {
         ESP_LOGW(TAG, "Failed to load turnouts: %s", esp_err_to_name(ret));
         s_count = 0;
+    }
+
+    // Compute next_turnout_id from max existing id + 1
+    s_next_turnout_id = 1;
+    for (size_t i = 0; i < s_count; i++) {
+        if (s_turnouts[i].id >= s_next_turnout_id) {
+            s_next_turnout_id = s_turnouts[i].id + 1;
+        }
     }
 
     // Import from JMRI XML if present (supplements existing turnouts)
@@ -155,6 +180,7 @@ int turnout_manager_add(uint64_t event_normal, uint64_t event_reverse, const cha
     t->last_update_us = 0;
     t->command_pending = false;
     t->user_order = (uint16_t)idx;
+    t->id = s_next_turnout_id++;
 
     s_count++;
     ESP_LOGI(TAG, "Added turnout '%s' at index %d", t->name, idx);
@@ -293,6 +319,21 @@ int turnout_manager_find_by_event(uint64_t event_id)
     for (size_t i = 0; i < s_count; i++) {
         if (s_turnouts[i].event_normal == event_id ||
             s_turnouts[i].event_reverse == event_id) {
+            xSemaphoreGive(s_mutex);
+            return (int)i;
+        }
+    }
+
+    xSemaphoreGive(s_mutex);
+    return -1;
+}
+
+int turnout_manager_find_by_id(uint32_t id)
+{
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+
+    for (size_t i = 0; i < s_count; i++) {
+        if (s_turnouts[i].id == id) {
             xSemaphoreGive(s_mutex);
             return (int)i;
         }

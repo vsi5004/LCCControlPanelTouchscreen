@@ -42,18 +42,18 @@ bool panel_layout_is_empty(const panel_layout_t *layout)
 }
 
 bool panel_layout_is_turnout_placed(const panel_layout_t *layout,
-                                     uint64_t event_normal)
+                                     uint32_t turnout_id)
 {
     for (size_t i = 0; i < layout->item_count; i++) {
-        if (layout->items[i].event_normal == event_normal) return true;
+        if (layout->items[i].turnout_id == turnout_id) return true;
     }
     return false;
 }
 
-int panel_layout_find_item(const panel_layout_t *layout, uint64_t event_normal)
+int panel_layout_find_item(const panel_layout_t *layout, uint32_t turnout_id)
 {
     for (size_t i = 0; i < layout->item_count; i++) {
-        if (layout->items[i].event_normal == event_normal) return (int)i;
+        if (layout->items[i].turnout_id == turnout_id) return (int)i;
     }
     return -1;
 }
@@ -67,13 +67,12 @@ int panel_layout_find_item(const panel_layout_t *layout, uint64_t event_normal)
  * @return true if resolved
  */
 static bool resolve_track_end(const panel_layout_t *layout,
-                               bool is_endpoint, uint32_t endpoint_id,
-                               uint64_t event, panel_point_type_t point,
+                               const panel_ref_t *ref,
                                int16_t *px, int16_t *py)
 {
-    if (is_endpoint) {
+    if (ref->type == PANEL_REF_ENDPOINT) {
         for (size_t j = 0; j < layout->endpoint_count; j++) {
-            if (layout->endpoints[j].id == endpoint_id) {
+            if (layout->endpoints[j].id == ref->id) {
                 *px = (int16_t)(layout->endpoints[j].grid_x * PANEL_GRID_SIZE);
                 *py = (int16_t)(layout->endpoints[j].grid_y * PANEL_GRID_SIZE);
                 return true;
@@ -82,10 +81,18 @@ static bool resolve_track_end(const panel_layout_t *layout,
         return false;
     }
 
-    /* Turnout connection point */
+    /* Turnout connection point — check last-hit hint first (#6: avoid full scan) */
+    static size_t s_last_hit = 0;
+    if (s_last_hit < layout->item_count &&
+        layout->items[s_last_hit].turnout_id == ref->id) {
+        panel_geometry_get_connection_point(&layout->items[s_last_hit], ref->point, px, py);
+        return true;
+    }
+
     for (size_t j = 0; j < layout->item_count; j++) {
-        if (layout->items[j].event_normal == event) {
-            panel_geometry_get_connection_point(&layout->items[j], point, px, py);
+        if (layout->items[j].turnout_id == ref->id) {
+            s_last_hit = j;
+            panel_geometry_get_connection_point(&layout->items[j], ref->point, px, py);
             return true;
         }
     }
@@ -97,18 +104,8 @@ bool panel_layout_resolve_track(const panel_layout_t *layout,
                                  int16_t *x1, int16_t *y1,
                                  int16_t *x2, int16_t *y2)
 {
-    bool from_ok = resolve_track_end(layout,
-                                      track->from_is_endpoint,
-                                      track->from_endpoint_id,
-                                      track->from_event,
-                                      track->from_point,
-                                      x1, y1);
-    bool to_ok   = resolve_track_end(layout,
-                                      track->to_is_endpoint,
-                                      track->to_endpoint_id,
-                                      track->to_event,
-                                      track->to_point,
-                                      x2, y2);
+    bool from_ok = resolve_track_end(layout, &track->from, x1, y1);
+    bool to_ok   = resolve_track_end(layout, &track->to,   x2, y2);
     return from_ok && to_ok;
 }
 
@@ -161,7 +158,7 @@ bool panel_layout_get_bounds(const panel_layout_t *layout,
 // Mutation Operations
 // ============================================================================
 
-int panel_layout_add_item(panel_layout_t *layout, uint64_t event_normal,
+int panel_layout_add_item(panel_layout_t *layout, uint32_t turnout_id,
                            uint16_t grid_x, uint16_t grid_y)
 {
     if (layout->item_count >= PANEL_MAX_ITEMS) {
@@ -171,7 +168,7 @@ int panel_layout_add_item(panel_layout_t *layout, uint64_t event_normal,
 
     size_t idx = layout->item_count;
     panel_item_t *pi = &layout->items[idx];
-    pi->event_normal = event_normal;
+    pi->turnout_id = turnout_id;
     pi->grid_x = grid_x;
     pi->grid_y = grid_y;
     pi->rotation = 0;
@@ -225,7 +222,7 @@ void panel_layout_remove_item(panel_layout_t *layout, size_t index)
 {
     if (index >= layout->item_count) return;
 
-    uint64_t removed_event = layout->items[index].event_normal;
+    uint32_t removed_id = layout->items[index].turnout_id;
 
     /* Shift items down */
     for (size_t i = index; i < layout->item_count - 1; i++) {
@@ -236,10 +233,10 @@ void panel_layout_remove_item(panel_layout_t *layout, size_t index)
     /* Cascade: remove tracks referencing this turnout */
     size_t write = 0;
     for (size_t i = 0; i < layout->track_count; i++) {
-        bool from_match = !layout->tracks[i].from_is_endpoint &&
-                          layout->tracks[i].from_event == removed_event;
-        bool to_match   = !layout->tracks[i].to_is_endpoint &&
-                          layout->tracks[i].to_event == removed_event;
+        bool from_match = layout->tracks[i].from.type == PANEL_REF_TURNOUT &&
+                          layout->tracks[i].from.id == removed_id;
+        bool to_match   = layout->tracks[i].to.type == PANEL_REF_TURNOUT &&
+                          layout->tracks[i].to.id == removed_id;
         if (!from_match && !to_match) {
             if (write != i) layout->tracks[write] = layout->tracks[i];
             write++;
@@ -267,10 +264,10 @@ void panel_layout_remove_endpoint(panel_layout_t *layout, size_t index)
     /* Cascade: remove tracks referencing this endpoint */
     size_t write = 0;
     for (size_t i = 0; i < layout->track_count; i++) {
-        bool refs = (layout->tracks[i].from_is_endpoint &&
-                     layout->tracks[i].from_endpoint_id == removed_id) ||
-                    (layout->tracks[i].to_is_endpoint &&
-                     layout->tracks[i].to_endpoint_id == removed_id);
+        bool refs = (layout->tracks[i].from.type == PANEL_REF_ENDPOINT &&
+                     layout->tracks[i].from.id == removed_id) ||
+                    (layout->tracks[i].to.type == PANEL_REF_ENDPOINT &&
+                     layout->tracks[i].to.id == removed_id);
         if (!refs) {
             if (write != i) layout->tracks[write] = layout->tracks[i];
             write++;

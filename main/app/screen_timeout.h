@@ -96,6 +96,16 @@ uint16_t screen_timeout_get_duration(void);
 bool screen_timeout_is_screen_on(void);
 
 /**
+ * @brief Check if screen is fully active (not fading in or out)
+ *
+ * Use this to suppress touch interactions while the screen is waking.
+ * Returns true only when the screen is at full brightness.
+ *
+ * @return true if screen is in the ACTIVE state
+ */
+bool screen_timeout_is_fully_active(void);
+
+/**
  * @brief Manually turn screen on
  * 
  * Also resets the timeout timer.

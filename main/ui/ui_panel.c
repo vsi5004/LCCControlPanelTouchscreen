@@ -114,10 +114,10 @@ static void turnout_click_cb(lv_event_t *e)
 
     if (item_idx >= s_layout.item_count) return;
 
-    uint64_t event_normal = s_layout.items[item_idx].event_normal;
+    uint32_t turnout_id = s_layout.items[item_idx].turnout_id;
 
-    // Find the turnout in the manager by event
-    int tm_idx = turnout_manager_find_by_event(event_normal);
+    // Find the turnout in the manager by stable ID
+    int tm_idx = turnout_manager_find_by_id(turnout_id);
     if (tm_idx < 0) {
         ESP_LOGW(TAG, "Turnout not found in manager for panel item %d", (int)item_idx);
         return;
@@ -216,15 +216,6 @@ static void panel_clear_render(void)
 }
 
 /**
- * @brief Find the turnout manager index for a given event_normal key
- * @return manager index, or -1 if not found
- */
-static int find_turnout_for_event(uint64_t event_normal)
-{
-    return turnout_manager_find_by_event(event_normal);
-}
-
-/**
  * @brief Render all turnout items and track segments on the canvas
  */
 static void panel_render(void)
@@ -274,6 +265,28 @@ static void panel_render(void)
         }
     }
 
+    // --- Snapshot turnout states under a single lock (#2: batch lookups) ---
+    turnout_state_t item_states[PANEL_MAX_ITEMS];
+    bool item_found[PANEL_MAX_ITEMS];
+    {
+        turnout_manager_lock();
+        const turnout_t *turnouts;
+        size_t turnout_count;
+        turnout_manager_get_all(&turnouts, &turnout_count);
+        for (size_t i = 0; i < s_layout.item_count && i < PANEL_MAX_ITEMS; i++) {
+            item_states[i] = TURNOUT_STATE_UNKNOWN;
+            item_found[i] = false;
+            for (size_t j = 0; j < turnout_count; j++) {
+                if (turnouts[j].id == s_layout.items[i].turnout_id) {
+                    item_states[i] = turnouts[j].state;
+                    item_found[i] = true;
+                    break;
+                }
+            }
+        }
+        turnout_manager_unlock();
+    }
+
     // --- Render turnout items ---
     for (size_t i = 0; i < s_layout.item_count && i < PANEL_MAX_ITEMS; i++) {
         const panel_item_t *pi = &s_layout.items[i];
@@ -281,15 +294,8 @@ static void panel_render(void)
         lv_point_t entry, normal, reverse;
         panel_geometry_get_points(pi, &entry, &normal, &reverse);
 
-        // Look up turnout state
-        int tm_idx = find_turnout_for_event(pi->event_normal);
-        turnout_state_t state = TURNOUT_STATE_UNKNOWN;
-        if (tm_idx >= 0) {
-            turnout_t t;
-            if (turnout_manager_get_by_index((size_t)tm_idx, &t) == ESP_OK) {
-                state = t.state;
-            }
-        }
+        turnout_state_t state = item_states[i];
+        bool has_turnout = item_found[i];
 
         // Entry → Normal line (straight leg)
         s_line_points[i][0][0].x = fit_x((int16_t)entry.x);
@@ -305,7 +311,7 @@ static void panel_render(void)
         lv_obj_set_style_line_width(line_normal, line_w, LV_PART_MAIN);
         lv_obj_set_style_line_rounded(line_normal, true, LV_PART_MAIN);
         lv_obj_set_style_line_color(line_normal,
-            (tm_idx >= 0) ? state_to_color_normal_leg(state) : lv_color_hex(COLOR_ORPHAN),
+            has_turnout ? state_to_color_normal_leg(state) : lv_color_hex(COLOR_ORPHAN),
             LV_PART_MAIN);
         s_item_lines[i][0] = line_normal;
 
@@ -320,7 +326,7 @@ static void panel_render(void)
         lv_obj_set_style_line_width(line_reverse, line_w, LV_PART_MAIN);
         lv_obj_set_style_line_rounded(line_reverse, true, LV_PART_MAIN);
         lv_obj_set_style_line_color(line_reverse,
-            (tm_idx >= 0) ? state_to_color_reverse_leg(state) : lv_color_hex(COLOR_ORPHAN),
+            has_turnout ? state_to_color_reverse_leg(state) : lv_color_hex(COLOR_ORPHAN),
             LV_PART_MAIN);
         s_item_lines[i][1] = line_reverse;
 
@@ -347,7 +353,7 @@ static void panel_render(void)
         s_item_hitbox[i] = hitbox;
 
         // If turnout not found in manager, show a "?" label
-        if (tm_idx < 0) {
+        if (!has_turnout) {
             lv_obj_t *q_label = lv_label_create(hitbox);
             lv_label_set_text(q_label, "?");
             lv_obj_set_style_text_font(q_label, &lv_font_montserrat_14, LV_PART_MAIN);
@@ -488,7 +494,7 @@ void ui_panel_update_turnout(int index, turnout_state_t state)
     if (turnout_manager_get_by_index((size_t)index, &t) != ESP_OK) return;
 
     for (size_t i = 0; i < s_rendered_item_count; i++) {
-        if (s_layout.items[i].event_normal == t.event_normal) {
+        if (s_layout.items[i].turnout_id == t.id) {
             // Update normal leg color
             if (s_item_lines[i][0]) {
                 lv_obj_set_style_line_color(s_item_lines[i][0],
@@ -499,6 +505,7 @@ void ui_panel_update_turnout(int index, turnout_state_t state)
                 lv_obj_set_style_line_color(s_item_lines[i][1],
                     state_to_color_reverse_leg(state), LV_PART_MAIN);
             }
+            break;  /* Each turnout_id appears at most once in the layout */
         }
     }
 }

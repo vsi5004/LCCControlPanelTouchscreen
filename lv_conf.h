@@ -18,7 +18,7 @@
 
 /* Memory settings */
 #define LV_MEM_CUSTOM 0
-#define LV_MEM_SIZE (64 * 1024U)
+#define LV_MEM_SIZE (96 * 1024U)          /* 96KB — headroom for builder object churn */
 #define LV_MEM_ADR 0
 
 /* Display settings */
@@ -51,28 +51,28 @@
 #define LV_FONT_MONTSERRAT_14 1
 #define LV_FONT_MONTSERRAT_16 1
 #define LV_FONT_MONTSERRAT_18 1
-#define LV_FONT_MONTSERRAT_20 1
+#define LV_FONT_MONTSERRAT_20 0          /* unused — saves ~30KB flash */
 #define LV_FONT_MONTSERRAT_24 1
 #define LV_FONT_MONTSERRAT_28 1
 #define LV_FONT_MONTSERRAT_32 1
 #define LV_FONT_DEFAULT &lv_font_montserrat_32
 
-/* Widget usage */
-#define LV_USE_ARC 1
-#define LV_USE_BAR 1
+/* Widget usage — disabled widgets save flash + reduce LVGL heap pressure */
+#define LV_USE_ARC 0
+#define LV_USE_BAR 0
 #define LV_USE_BTN 1
-#define LV_USE_BTNMATRIX 1
-#define LV_USE_CANVAS 1
-#define LV_USE_CHECKBOX 1
-#define LV_USE_DROPDOWN 1
-#define LV_USE_IMG 1
+#define LV_USE_BTNMATRIX 1           /* required by tabview */
+#define LV_USE_CANVAS 0
+#define LV_USE_CHECKBOX 0
+#define LV_USE_DROPDOWN 0
+#define LV_USE_IMG 0
 #define LV_USE_LABEL 1
 #define LV_USE_LINE 1
-#define LV_USE_ROLLER 1
-#define LV_USE_SLIDER 1
-#define LV_USE_SWITCH 1
+#define LV_USE_ROLLER 0
+#define LV_USE_SLIDER 0
+#define LV_USE_SWITCH 0
 #define LV_USE_TEXTAREA 1
-#define LV_USE_TABLE 1
+#define LV_USE_TABLE 0
 #define LV_USE_TABVIEW 1
 
 /* Theme */

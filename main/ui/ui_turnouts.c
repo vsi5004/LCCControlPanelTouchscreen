@@ -198,24 +198,9 @@ static void flip_polarity_cb(lv_event_t *e)
 
     int idx = s_edit_index;
 
-    // Get old event_normal before flip (for panel layout update)
-    turnout_t t_before;
-    if (turnout_manager_get_by_index(idx, &t_before) != ESP_OK) return;
-    uint64_t old_event_normal = t_before.event_normal;
-
-    // Flip events in the manager
+    // Flip events in the manager (stable ID is unchanged, so panel layout
+    // references remain valid — no panel_layout update needed)
     turnout_manager_flip_polarity((size_t)idx);
-
-    // Update panel layout item's event_normal key if this turnout is placed
-    panel_layout_t *layout = panel_layout_get();
-    int pi = panel_layout_find_item(layout, old_event_normal);
-    if (pi >= 0) {
-        turnout_t t_after;
-        if (turnout_manager_get_by_index(idx, &t_after) == ESP_OK) {
-            layout->items[pi].event_normal = t_after.event_normal;
-        }
-        panel_storage_save(layout);
-    }
 
     // Re-register LCC events
     lcc_node_unregister_all_turnout_events();
@@ -365,10 +350,10 @@ static void delete_confirm_btn_cb(lv_event_t *e)
 
         // Remove matching panel item (+ cascade-delete connected tracks)
         panel_layout_t *layout = panel_layout_get();
-        int pi = panel_layout_find_item(layout, t.event_normal);
+        int pi = panel_layout_find_item(layout, t.id);
         if (pi >= 0) {
-            ESP_LOGI(TAG, "Removing panel item for deleted turnout (event %llx)",
-                     (unsigned long long)t.event_normal);
+            ESP_LOGI(TAG, "Removing panel item for deleted turnout (id %u)",
+                     (unsigned)t.id);
             panel_layout_remove_item(layout, (size_t)pi);
             panel_storage_save(layout);
         }

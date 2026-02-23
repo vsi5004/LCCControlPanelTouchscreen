@@ -2,15 +2,16 @@
  * @file panel_storage.c
  * @brief Panel layout persistence to SD card
  *
- * Stores the control panel layout as JSON on SD card. Event IDs are stored as
- * dotted-hex strings matching the turnout_storage convention.
+ * Stores the control panel layout as JSON on SD card. Turnout items are
+ * referenced by their stable turnout_id (integer). Track endpoints use
+ * "turnout:N" or "endpoint:N" string format.
  *
  * JSON format:
  * {
- *   "version": 1,
+ *   "version": 2,
  *   "items": [
  *     {
- *       "event_normal": "05.01.01.01.22.60.00.00",
+ *       "turnout_id": 1,
  *       "grid_x": 5,
  *       "grid_y": 3,
  *       "rotation": 0,
@@ -27,7 +28,7 @@
  *   "next_endpoint_id": 2,
  *   "tracks": [
  *     {
- *       "from": "05.01.01.01.22.60.00.00",
+ *       "from": "turnout:1",
  *       "from_point": "entry",
  *       "to": "endpoint:1",
  *       "to_point": "entry"
@@ -51,53 +52,6 @@
 #define SD_OPEN_RETRY_MS     100
 
 static const char *TAG = "panel_storage";
-
-// ============================================================================
-// Event ID formatting helpers (same as turnout_storage.c)
-// ============================================================================
-
-static void format_event_id(uint64_t event_id, char *buf)
-{
-    snprintf(buf, 24, "%02X.%02X.%02X.%02X.%02X.%02X.%02X.%02X",
-             (unsigned)((event_id >> 56) & 0xFF),
-             (unsigned)((event_id >> 48) & 0xFF),
-             (unsigned)((event_id >> 40) & 0xFF),
-             (unsigned)((event_id >> 32) & 0xFF),
-             (unsigned)((event_id >> 24) & 0xFF),
-             (unsigned)((event_id >> 16) & 0xFF),
-             (unsigned)((event_id >> 8) & 0xFF),
-             (unsigned)(event_id & 0xFF));
-}
-
-static bool parse_event_id(const char *str, uint64_t *out_id)
-{
-    if (!str || !out_id) return false;
-
-    unsigned int bytes[8];
-    if (sscanf(str, "%02x.%02x.%02x.%02x.%02x.%02x.%02x.%02x",
-               &bytes[0], &bytes[1], &bytes[2], &bytes[3],
-               &bytes[4], &bytes[5], &bytes[6], &bytes[7]) == 8) {
-        *out_id = ((uint64_t)bytes[0] << 56) |
-                  ((uint64_t)bytes[1] << 48) |
-                  ((uint64_t)bytes[2] << 40) |
-                  ((uint64_t)bytes[3] << 32) |
-                  ((uint64_t)bytes[4] << 24) |
-                  ((uint64_t)bytes[5] << 16) |
-                  ((uint64_t)bytes[6] << 8) |
-                  ((uint64_t)bytes[7]);
-        return true;
-    }
-
-    // Also try plain hex: "0501010122600000"
-    char *endptr;
-    uint64_t val = strtoull(str, &endptr, 16);
-    if (endptr != str && *endptr == '\0') {
-        *out_id = val;
-        return true;
-    }
-
-    return false;
-}
 
 // ============================================================================
 // Point type string conversion
@@ -169,8 +123,9 @@ esp_err_t panel_storage_load(panel_layout_t *layout)
 
     // Check version
     cJSON *version = cJSON_GetObjectItem(root, "version");
-    if (!cJSON_IsNumber(version) || version->valueint != 1) {
-        ESP_LOGW(TAG, "Unknown panel version: %d", version ? version->valueint : -1);
+    int ver = cJSON_IsNumber(version) ? version->valueint : -1;
+    if (ver != 1 && ver != 2) {
+        ESP_LOGW(TAG, "Unknown panel version: %d", ver);
         cJSON_Delete(root);
         return ESP_OK;
     }
@@ -188,19 +143,16 @@ esp_err_t panel_storage_load(panel_layout_t *layout)
             cJSON *item = cJSON_GetArrayItem(items, i);
             if (!item) continue;
 
-            cJSON *ev = cJSON_GetObjectItem(item, "event_normal");
+            cJSON *tid = cJSON_GetObjectItem(item, "turnout_id");
             cJSON *gx = cJSON_GetObjectItem(item, "grid_x");
             cJSON *gy = cJSON_GetObjectItem(item, "grid_y");
             cJSON *rot = cJSON_GetObjectItem(item, "rotation");
             cJSON *mir = cJSON_GetObjectItem(item, "mirrored");
 
-            if (!cJSON_IsString(ev)) continue;
+            if (!cJSON_IsNumber(tid)) continue;
 
             panel_item_t *pi = &layout->items[layout->item_count];
-            if (!parse_event_id(ev->valuestring, &pi->event_normal)) {
-                ESP_LOGW(TAG, "Skipping item %d - invalid event ID: %s", i, ev->valuestring);
-                continue;
-            }
+            pi->turnout_id = (uint32_t)tid->valueint;
 
             pi->grid_x = cJSON_IsNumber(gx) ? (uint16_t)gx->valueint : 0;
             pi->grid_y = cJSON_IsNumber(gy) ? (uint16_t)gy->valueint : 0;
@@ -266,26 +218,34 @@ esp_err_t panel_storage_load(panel_layout_t *layout)
             panel_track_t *pt = &layout->tracks[layout->track_count];
             memset(pt, 0, sizeof(*pt));
 
-            // Parse "from" reference — either "endpoint:N" or dotted-hex event
+            // Parse "from" reference — either "endpoint:N" or "turnout:N"
             const char *from_str = from_ev->valuestring;
             if (strncmp(from_str, "endpoint:", 9) == 0) {
-                pt->from_is_endpoint = true;
-                pt->from_endpoint_id = (uint32_t)atoi(from_str + 9);
+                pt->from.type = PANEL_REF_ENDPOINT;
+                pt->from.id = (uint32_t)atoi(from_str + 9);
+            } else if (strncmp(from_str, "turnout:", 8) == 0) {
+                pt->from.type = PANEL_REF_TURNOUT;
+                pt->from.id = (uint32_t)atoi(from_str + 8);
             } else {
-                if (!parse_event_id(from_str, &pt->from_event)) continue;
+                ESP_LOGW(TAG, "Skipping track %d - unrecognized from ref: %s", i, from_str);
+                continue;
             }
 
             // Parse "to" reference
             const char *to_str = to_ev->valuestring;
             if (strncmp(to_str, "endpoint:", 9) == 0) {
-                pt->to_is_endpoint = true;
-                pt->to_endpoint_id = (uint32_t)atoi(to_str + 9);
+                pt->to.type = PANEL_REF_ENDPOINT;
+                pt->to.id = (uint32_t)atoi(to_str + 9);
+            } else if (strncmp(to_str, "turnout:", 8) == 0) {
+                pt->to.type = PANEL_REF_TURNOUT;
+                pt->to.id = (uint32_t)atoi(to_str + 8);
             } else {
-                if (!parse_event_id(to_str, &pt->to_event)) continue;
+                ESP_LOGW(TAG, "Skipping track %d - unrecognized to ref: %s", i, to_str);
+                continue;
             }
 
-            pt->from_point = cJSON_IsString(from_pt) ? str_to_point_type(from_pt->valuestring) : PANEL_POINT_ENTRY;
-            pt->to_point = cJSON_IsString(to_pt) ? str_to_point_type(to_pt->valuestring) : PANEL_POINT_ENTRY;
+            pt->from.point = cJSON_IsString(from_pt) ? str_to_point_type(from_pt->valuestring) : PANEL_POINT_ENTRY;
+            pt->to.point = cJSON_IsString(to_pt) ? str_to_point_type(to_pt->valuestring) : PANEL_POINT_ENTRY;
 
             layout->track_count++;
         }
@@ -312,7 +272,7 @@ esp_err_t panel_storage_save(const panel_layout_t *layout)
         return ESP_ERR_NO_MEM;
     }
 
-    cJSON_AddNumberToObject(root, "version", 1);
+    cJSON_AddNumberToObject(root, "version", 2);
 
     // Serialize items
     cJSON *items = cJSON_AddArrayToObject(root, "items");
@@ -321,14 +281,12 @@ esp_err_t panel_storage_save(const panel_layout_t *layout)
         return ESP_ERR_NO_MEM;
     }
 
-    char ev_buf[24];
     for (size_t i = 0; i < layout->item_count; i++) {
         const panel_item_t *pi = &layout->items[i];
         cJSON *item = cJSON_CreateObject();
         if (!item) continue;
 
-        format_event_id(pi->event_normal, ev_buf);
-        cJSON_AddStringToObject(item, "event_normal", ev_buf);
+        cJSON_AddNumberToObject(item, "turnout_id", pi->turnout_id);
         cJSON_AddNumberToObject(item, "grid_x", pi->grid_x);
         cJSON_AddNumberToObject(item, "grid_y", pi->grid_y);
         cJSON_AddNumberToObject(item, "rotation", pi->rotation);
@@ -365,21 +323,21 @@ esp_err_t panel_storage_save(const panel_layout_t *layout)
         cJSON *track = cJSON_CreateObject();
         if (!track) continue;
 
-        if (pt->from_is_endpoint) {
-            snprintf(ref_buf, sizeof(ref_buf), "endpoint:%u", (unsigned)pt->from_endpoint_id);
+        if (pt->from.type == PANEL_REF_ENDPOINT) {
+            snprintf(ref_buf, sizeof(ref_buf), "endpoint:%u", (unsigned)pt->from.id);
         } else {
-            format_event_id(pt->from_event, ref_buf);
+            snprintf(ref_buf, sizeof(ref_buf), "turnout:%u", (unsigned)pt->from.id);
         }
         cJSON_AddStringToObject(track, "from", ref_buf);
-        cJSON_AddStringToObject(track, "from_point", point_type_to_str(pt->from_point));
+        cJSON_AddStringToObject(track, "from_point", point_type_to_str(pt->from.point));
 
-        if (pt->to_is_endpoint) {
-            snprintf(ref_buf, sizeof(ref_buf), "endpoint:%u", (unsigned)pt->to_endpoint_id);
+        if (pt->to.type == PANEL_REF_ENDPOINT) {
+            snprintf(ref_buf, sizeof(ref_buf), "endpoint:%u", (unsigned)pt->to.id);
         } else {
-            format_event_id(pt->to_event, ref_buf);
+            snprintf(ref_buf, sizeof(ref_buf), "turnout:%u", (unsigned)pt->to.id);
         }
         cJSON_AddStringToObject(track, "to", ref_buf);
-        cJSON_AddStringToObject(track, "to_point", point_type_to_str(pt->to_point));
+        cJSON_AddStringToObject(track, "to_point", point_type_to_str(pt->to.point));
 
         cJSON_AddItemToArray(tracks, track);
     }

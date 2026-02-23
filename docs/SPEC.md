@@ -193,14 +193,16 @@ Rules:
 ### File: `panel.json` (SD Card)
 
 Stores the control panel layout (placed turnouts, track endpoints, track segments).
-Turnouts are keyed by their `event_normal` ID (dotted hex string), not array index.
+Turnouts are keyed by their stable `turnout_id` (uint32 auto-increment key from
+`turnout_manager`). Track endpoints use a tagged-union reference format:
+`"turnout:N"` or `"endpoint:N"`.
 
 ```json
 {
   "version": 1,
   "items": [
     {
-      "event_normal": "05.01.01.01.22.60.00.00",
+      "turnout_id": 1,
       "grid_x": 10,
       "grid_y": 5,
       "rotation": 0,
@@ -213,7 +215,7 @@ Turnouts are keyed by their `event_normal` ID (dotted hex string), not array ind
   "next_endpoint_id": 2,
   "tracks": [
     {
-      "from": "05.01.01.01.22.60.00.00",
+      "from": "turnout:1",
       "from_point": "entry",
       "to": "endpoint:1",
       "to_point": "entry"

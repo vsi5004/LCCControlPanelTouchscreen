@@ -172,6 +172,14 @@ esp_err_t turnout_storage_load(turnout_t *turnouts, size_t max_count, size_t *ou
             continue;
         }
 
+        // Stable ID
+        cJSON *j_id = cJSON_GetObjectItem(item, "id");
+        if (cJSON_IsNumber(j_id)) {
+            t->id = (uint32_t)j_id->valueint;
+        } else {
+            t->id = (uint32_t)(count + 1);  // auto-assign if missing
+        }
+
         // Order
         cJSON *order = cJSON_GetObjectItem(item, "order");
         if (cJSON_IsNumber(order)) {
@@ -217,6 +225,8 @@ esp_err_t turnout_storage_save(const turnout_t *turnouts, size_t count)
         if (!item) continue;
 
         cJSON_AddStringToObject(item, "name", t->name);
+
+        cJSON_AddNumberToObject(item, "id", t->id);
 
         format_event_id(t->event_normal, ev_buf);
         cJSON_AddStringToObject(item, "event_normal", ev_buf);

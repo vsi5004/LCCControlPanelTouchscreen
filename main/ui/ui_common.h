@@ -47,6 +47,7 @@ typedef enum {
  * by a pair of LCC event IDs: one for NORMAL and one for REVERSE.
  */
 typedef struct {
+    uint32_t id;                ///< Stable unique ID (auto-assigned, never changes)
     char name[32];              ///< User-assigned name
     uint64_t event_normal;      ///< LCC event ID for NORMAL/CLOSED command
     uint64_t event_reverse;     ///< LCC event ID for REVERSE/THROWN command

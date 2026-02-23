@@ -147,6 +147,14 @@ void turnout_manager_set_pending(size_t index, bool pending);
 int turnout_manager_find_by_event(uint64_t event_id);
 
 /**
+ * @brief Find a turnout by stable ID
+ *
+ * @param id Stable turnout ID (turnout_t.id)
+ * @return Index of the matching turnout, or -1 if not found
+ */
+int turnout_manager_find_by_id(uint32_t id);
+
+/**
  * @brief Check for stale turnouts and update their state
  * 
  * Any turnout with last_update_us older than timeout_ms will be marked STALE.

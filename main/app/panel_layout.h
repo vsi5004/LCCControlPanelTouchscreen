@@ -61,12 +61,14 @@ typedef enum {
 /**
  * @brief A turnout placed on the panel layout
  *
- * Identified by event_normal which is the unique key linking to turnout_manager.
+ * Identified by turnout_id which is the stable unique key linking to
+ * turnout_manager.  This ID never changes when events are edited or
+ * polarity is flipped, so track references remain valid.
  * Position is in grid coordinates (multiply by PANEL_GRID_SIZE for pixels).
  * Rotation 0-7 maps to 0°, 45°, 90°, ... 315° clockwise.
  */
 typedef struct {
-    uint64_t event_normal;      ///< Turnout key (matches turnout_t.event_normal)
+    uint32_t turnout_id;        ///< Stable turnout ID (matches turnout_t.id)
     uint16_t grid_x;            ///< X position in grid cells
     uint16_t grid_y;            ///< Y position in grid cells
     uint8_t  rotation;          ///< Rotation index 0-7 (0°-315° in 45° steps)
@@ -86,22 +88,36 @@ typedef struct {
 } panel_endpoint_t;
 
 /**
- * @brief A track segment connecting two connection points
+ * @brief Type of panel element referenced by a track endpoint
  *
- * Each end of the track can connect to either a turnout (identified by
- * event_normal) or a graphical endpoint (identified by endpoint ID).
- * Use the is_endpoint flag to determine which ID field is valid.
+ * Extensible: add new element types (signals, crossings, etc.) here.
+ */
+typedef enum {
+    PANEL_REF_TURNOUT = 0,      ///< References a turnout (by turnout_t.id)
+    PANEL_REF_ENDPOINT,         ///< References a panel endpoint (by endpoint.id)
+} panel_ref_type_t;
+
+/**
+ * @brief A typed reference to a connectable panel element
+ *
+ * Generic "pointer" to any element that a track can connect to.
+ * The (type, id) pair uniquely identifies the target.
  */
 typedef struct {
-    uint64_t from_event;            ///< Source turnout key (valid when !from_is_endpoint)
-    panel_point_type_t from_point;  ///< Source connection point type
-    bool     from_is_endpoint;      ///< True if source is an endpoint, not a turnout
-    uint32_t from_endpoint_id;      ///< Endpoint ID (valid when from_is_endpoint)
+    panel_ref_type_t  type;     ///< What kind of element this references
+    uint32_t          id;       ///< Stable ID of the referenced element
+    panel_point_type_t point;   ///< Connection point (meaningful for turnouts)
+} panel_ref_t;
 
-    uint64_t to_event;              ///< Dest turnout key (valid when !to_is_endpoint)
-    panel_point_type_t to_point;    ///< Destination connection point type
-    bool     to_is_endpoint;        ///< True if dest is an endpoint, not a turnout
-    uint32_t to_endpoint_id;        ///< Endpoint ID (valid when to_is_endpoint)
+/**
+ * @brief A track segment connecting two connection points
+ *
+ * Each end is a panel_ref_t — a typed reference to any connectable
+ * element (turnout, endpoint, or future element types).
+ */
+typedef struct {
+    panel_ref_t from;               ///< Source connection
+    panel_ref_t to;                 ///< Destination connection
 } panel_track_t;
 
 /**
@@ -140,12 +156,12 @@ panel_layout_t* panel_layout_get(void);
 /** @brief Check if the layout has no items and no endpoints */
 bool panel_layout_is_empty(const panel_layout_t *layout);
 
-/** @brief Check if a turnout (by event_normal) is already placed */
+/** @brief Check if a turnout (by stable ID) is already placed */
 bool panel_layout_is_turnout_placed(const panel_layout_t *layout,
-                                     uint64_t event_normal);
+                                     uint32_t turnout_id);
 
-/** @brief Find a placed item index by event_normal.  Returns -1 if not found. */
-int panel_layout_find_item(const panel_layout_t *layout, uint64_t event_normal);
+/** @brief Find a placed item index by turnout ID.  Returns -1 if not found. */
+int panel_layout_find_item(const panel_layout_t *layout, uint32_t turnout_id);
 
 /**
  * @brief Resolve a track segment to pixel coordinates
@@ -186,7 +202,7 @@ bool panel_layout_get_bounds(const panel_layout_t *layout,
  * @brief Add a turnout item to the layout
  * @return Index of the new item, or -1 if layout is full
  */
-int panel_layout_add_item(panel_layout_t *layout, uint64_t event_normal,
+int panel_layout_add_item(panel_layout_t *layout, uint32_t turnout_id,
                            uint16_t grid_x, uint16_t grid_y);
 
 /**

@@ -71,12 +71,20 @@ static void lvgl_touch_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
     esp_err_t ret = esp_lcd_touch_get_data(touch, &point_data, &point_cnt, 1);
 
     if (ret == ESP_OK && point_cnt > 0) {
+        // Notify screen timeout module of touch activity (may trigger wake)
+        screen_timeout_notify_activity();
+
+        // Suppress LVGL input while the screen is waking — only allow
+        // touch interactions once the display has reached full brightness.
+        if (!screen_timeout_is_fully_active()) {
+            data->state = LV_INDEV_STATE_RELEASED;
+            return;
+        }
+
         data->point.x = point_data.x;
         data->point.y = point_data.y;
         data->state = LV_INDEV_STATE_PRESSED;
         
-        // Notify screen timeout module of touch activity
-        screen_timeout_notify_activity();
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
     }
