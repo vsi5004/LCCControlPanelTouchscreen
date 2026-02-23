@@ -1,4 +1,4 @@
-# LCC Lighting Touchscreen Partition Table
+# LCC Turnout Control Panel Partition Table
 # Supports OTA firmware updates via LCC Memory Configuration Protocol
 #
 # Name,   Type, SubType, Offset,   Size,    Flags

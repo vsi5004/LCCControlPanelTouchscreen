@@ -354,7 +354,7 @@ extern const SimpleNodeStaticValues SNIP_STATIC_DATA = {
     "IvanBuilds",                         // manufacturer_name
     "LCC Turnout Panel",                  // model_name
     "ESP32S3 TouchLCD 4.3",              // hardware_version
-    "2.0.0"                               // software_version
+    "1.0.0"                               // software_version
 };
 
 const char CDI_DATA[] =
@@ -364,7 +364,7 @@ const char CDI_DATA[] =
   <manufacturer>IvanBuilds</manufacturer>
   <model>LCC Turnout Panel</model>
   <hardwareVersion>Waveshare ESP32-S3 Touch LCD 4.3B</hardwareVersion>
-  <softwareVersion>2.0.0</softwareVersion>
+  <softwareVersion>1.0.0</softwareVersion>
 </identification>
 <acdi/>
 <segment space="251" origin="1">

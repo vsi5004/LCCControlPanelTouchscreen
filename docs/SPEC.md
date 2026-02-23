@@ -154,7 +154,7 @@ The device uses OpenMRN's CDI (Configuration Description Information) for:
 - Manufacturer: "IvanBuilds"
 - Model: "LCC Turnout Panel"
 - Hardware Version: "ESP32S3 LCD 4.3B"
-- Software Version: "2.0.0"
+- Software Version: "1.0.0"
 
 **Implementation Note:** User info (name/description) uses `space="251"` (ACDI user
 space) with `origin="1"` to avoid conflicts with manufacturer info at origin 0.
@@ -281,8 +281,8 @@ AC: Turnout tiles reflect current positions within a few seconds of boot.
 #### FR-010
 The application has two screens:
 - **Panel Screen** (default boot screen): Live control panel diagram showing placed
-  turnouts as Y-shapes with color-coded state and track segments. Header bar with
-  node ID and a settings gear icon for navigation to the settings screen.
+  turnouts as Y-shapes with color-coded state and track segments on a full-screen
+  canvas. Floating settings gear icon in the upper-right for navigation.
 - **Settings Screen**: Three-tab tabview (Turnouts, Add Turnout, Panel Builder)
   with a back button to return to the panel screen.
 
@@ -382,7 +382,7 @@ AC: Events seen on bus appear in discovery list within 1 second.
 Display placed turnouts as Y-shape symbols with color-coded state:
 - Green = Closed (Normal), Red = Thrown (Reverse), Grey = Unknown/Stale
 - Track segments drawn between connected endpoints
-- Layout auto-scaled and centered to fill the 800×440 canvas area with 20px margins
+- Layout auto-scaled and centered to fill the full 800×480 screen with 20px margins
 - Line widths and touch hitbox sizes scale proportionally (minimum 2px / 40×30)
 - Tapping a turnout Y-shape toggles its state (same logic as FR-021)
 
@@ -399,7 +399,7 @@ Provide a WYSIWYG editor (Panel Builder tab in settings) for designing the
 control panel layout, with:
 - Left sidebar: zoom controls (0.5×–2.0×), pan/home buttons (bottom-aligned),
   mode buttons (Place Turnout, Place Endpoint, Delete, Save)
-- Canvas area: 800×440 pixels with 20px grid snapping
+- Canvas area: 800×480 pixels with 20px grid snapping
 - Place turnouts from a roller filtered to unplaced turnouts only
 - Place track endpoints on turnout connection points (Normal/Reverse/Root)
 - Auto-connect endpoints to form track segments

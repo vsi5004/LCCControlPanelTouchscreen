@@ -1,6 +1,6 @@
 /**
  * @file lv_conf.h
- * @brief LVGL configuration for ESP32-S3 LCC Lighting Controller
+ * @brief LVGL configuration for ESP32-S3 LCC Turnout Control Panel
  */
 
 #ifndef LV_CONF_H

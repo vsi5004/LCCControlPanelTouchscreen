@@ -21,6 +21,19 @@
 | Firmware Update | ✓ Complete | OTA via LCC Memory Config Protocol, JMRI compatible |
 | Inline Edit/Delete | ✓ Complete | Edit (rename + flip polarity) and delete turnouts from tile icons |
 
+### Recent Changes (Session 2026-02-23c)
+- Removed panel screen header bar — canvas now uses full 800×480 screen
+  (`PANEL_CANVAS_HEIGHT` 440→480, `PANEL_HEADER_HEIGHT` removed)
+- Settings gear button floats semi-transparent in the upper-right corner
+  (parented to screen, `LV_OPA_70` background)
+- Removed unused `COLOR_HEADER_BG` constant
+- Release prep: renamed all "LCCLightingTouchscreen" → "LCCControlPanelTouchscreen"
+  in build-release.yml, FLASHING.md, partitions.csv, lv_conf.h (×3)
+- Release prep: SNIP/CDI software version 2.0.0 → 1.0.0 (lcc_node.cpp, SPEC.md)
+- Release prep: FLASHING.md fully rewritten for turnout control panel
+- Release prep: README updated with Panel Screen and Panel Builder sections
+- Updated all documentation (ARCHITECTURE.md, SPEC.md, AGENTS.md, README.md)
+
 ### Recent Changes (Session 2026-02-23b)
 - Refactored `panel_track_t` from 8-field flat struct to tagged-union `panel_ref_t`
   references (`{type, id, point}` with `PANEL_REF_TURNOUT` / `PANEL_REF_ENDPOINT`).
@@ -67,7 +80,7 @@
 - Added SD card write retry (3 attempts, 100ms delay) to `panel_storage_save()` and
   `turnout_storage_save()` to handle SPI timeout after idle periods
 - Added auto-fit scaling to control panel screen: layout is uniformly scaled and
-  centered to fill the 800×440 canvas with 20px margins; line widths and hitbox
+  centered to fill the full 800×480 screen with 20px margins; line widths and hitbox
   sizes scale proportionally (minimums: 2px lines, 40×30 hitboxes)
 - Updated panel.json format documentation to reflect event_normal-based keys
 - Updated all documentation

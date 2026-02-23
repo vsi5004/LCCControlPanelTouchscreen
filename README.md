@@ -251,7 +251,20 @@ The following settings can be configured via any LCC configuration tool (JMRI, e
 
 ## User Interface
 
-### Turnouts Tab (Default)
+### Panel Screen (Default Boot Screen)
+
+The panel screen displays a live control panel diagram:
+
+- Placed turnouts rendered as Y-shape symbols with color-coded state
+- **Green** = Closed, **Yellow** = Thrown, **Grey** = Unknown, **Red** = Stale
+- Track segments connect turnout endpoints
+- Layout auto-scaled and centered to fill the full 800×480 screen
+- Tap any turnout Y-shape to toggle its state (sends LCC event)
+- Floating settings gear icon in the upper-right corner for navigation
+
+If the panel layout is empty, the device boots to the settings screen instead.
+
+### Turnouts Tab
 
 - Color-coded switchboard grid showing all registered turnouts
 - **Green** = Closed, **Yellow** = Thrown, **Grey** = Unknown, **Red** = Stale
@@ -269,6 +282,17 @@ The following settings can be configured via any LCC configuration tool (JMRI, e
 - **Discovery Mode**: Toggle to listen for events on the LCC bus and select from discovered events
 - On-screen keyboard for text input
 - Turnouts are saved to SD card immediately after adding
+
+### Panel Builder Tab
+
+- WYSIWYG editor for designing the control panel layout
+- Place turnouts from a filtered roller (unplaced turnouts only)
+- Place track endpoints on turnout connection points
+- Auto-connect endpoints to form track segments
+- Drag to reposition items, rotate and mirror turnouts
+- Delete with cascade removal of connected endpoints and tracks
+- Zoom (0.5×–2.0×), pan, and auto-center controls
+- Save layout to SD card (`panel.json`)
 
 ### Power Saving (Screen Timeout)
 

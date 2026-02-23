@@ -46,14 +46,14 @@ jobs:
         pip install esptool
         cd build
         esptool.py --chip esp32s3 merge_bin \
-          -o LCCLightingTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}-merged.bin \
+          -o LCCControlPanelTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}-merged.bin \
           --flash_mode dio \
           --flash_size 16MB \
           --flash_freq 80m \
           0x0 bootloader/bootloader.bin \
           0x8000 partition_table/partition-table.bin \
           0xf000 ota_data_initial.bin \
-          0x20000 LCCLightingTouchscreen.bin
+          0x20000 LCCControlPanelTouchscreen.bin
     
     - name: Prepare release files
       run: |
@@ -64,10 +64,10 @@ jobs:
         cp bootloader/bootloader.bin release/bootloader-${{ steps.version.outputs.commit }}.bin
         cp partition_table/partition-table.bin release/partition-table-${{ steps.version.outputs.commit }}.bin
         cp ota_data_initial.bin release/ota_data_initial-${{ steps.version.outputs.commit }}.bin
-        cp LCCLightingTouchscreen.bin release/LCCLightingTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}.bin
+        cp LCCControlPanelTouchscreen.bin release/LCCControlPanelTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}.bin
         
         # Copy merged binary
-        cp LCCLightingTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}-merged.bin release/
+        cp LCCControlPanelTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}-merged.bin release/
         
         # Copy flasher args for reference
         cp flasher_args.json release/
@@ -78,15 +78,15 @@ jobs:
         
         # Create flash instructions file
         cat > FLASH_INSTRUCTIONS.txt << 'EOF'
-        LCC Lighting Touchscreen Controller - Flash Instructions
-        ========================================================
+        LCC Turnout Control Panel - Flash Instructions
+        ================================================
         
         Version: ${{ steps.version.outputs.version }}
         Commit: ${{ steps.version.outputs.commit }}
         
         OPTION 1: Flash merged binary (Easiest)
         ----------------------------------------
-        esptool.py --chip esp32s3 --port COMX write_flash 0x0 LCCLightingTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}-merged.bin
+        esptool.py --chip esp32s3 --port COMX write_flash 0x0 LCCControlPanelTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}-merged.bin
         
         OPTION 2: Flash individual files
         ---------------------------------
@@ -95,14 +95,14 @@ jobs:
           0x0 bootloader-${{ steps.version.outputs.commit }}.bin \
           0x8000 partition-table-${{ steps.version.outputs.commit }}.bin \
           0xf000 ota_data_initial-${{ steps.version.outputs.commit }}.bin \
-          0x20000 LCCLightingTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}.bin
+          0x20000 LCCControlPanelTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}.bin
         
         For detailed instructions including GUI tools, see:
-        https://github.com/vsi5004/LCC-Lighting-Touchscreen/blob/main/FLASHING.md
+        https://github.com/vsi5004/LCCControlPanelTouchscreen/blob/main/FLASHING.md
         
         After flashing, configure your device via SD card:
         - nodeid.txt: Your LCC node ID (e.g., 05.01.01.01.9F.60.00)
-        - scenes.json: Your lighting scenes
+        - turnouts.json: Your turnout definitions (optional, can add via UI)
         - splash.jpg: Optional custom boot image (800x480)
         EOF
     
@@ -113,21 +113,21 @@ jobs:
         files: build/release/*
         generate_release_notes: true
         body: |
-          ## LCC Lighting Touchscreen Controller ${{ steps.version.outputs.version }}
+          ## LCC Turnout Control Panel ${{ steps.version.outputs.version }}
           
           **Commit:** `${{ steps.version.outputs.commit }}`
           **Build Date:** ${{ github.event.head_commit.timestamp }}
           
           ### 📦 Downloads
           
-          **Quick Start:** Download `LCCLightingTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}-merged.bin` and flash to address `0x0`
+          **Quick Start:** Download `LCCControlPanelTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}-merged.bin` and flash to address `0x0`
           
           **Advanced:** Download individual binaries and flash to respective addresses (see `FLASH_INSTRUCTIONS.txt`)
           
           ### 📋 Files Included
           
-          - `LCCLightingTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}-merged.bin` - Complete firmware image (flash to 0x0)
-          - `LCCLightingTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}.bin` - Application binary only (flash to 0x20000)
+          - `LCCControlPanelTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}-merged.bin` - Complete firmware image (flash to 0x0)
+          - `LCCControlPanelTouchscreen-${{ steps.version.outputs.version }}-${{ steps.version.outputs.commit }}.bin` - Application binary only (flash to 0x20000)
           - `bootloader-${{ steps.version.outputs.commit }}.bin` - Bootloader (flash to 0x0)
           - `partition-table-${{ steps.version.outputs.commit }}.bin` - Partition table (flash to 0x8000)
           - `ota_data_initial-${{ steps.version.outputs.commit }}.bin` - OTA data (flash to 0xf000)
@@ -137,7 +137,7 @@ jobs:
           
           ### 📖 Documentation
           
-          See [FLASHING.md](https://github.com/vsi5004/LCC-Lighting-Touchscreen/blob/main/FLASHING.md) for detailed flashing instructions using:
+          See [FLASHING.md](https://github.com/vsi5004/LCCControlPanelTouchscreen/blob/main/FLASHING.md) for detailed flashing instructions using:
           - esptool.py (command line)
           - ESP Flash Download Tool (Windows GUI)
           - Web-based flashers
@@ -146,10 +146,10 @@ jobs:
           
           After flashing, prepare your SD card with:
           1. `nodeid.txt` - Your unique LCC node ID
-          2. `scenes.json` - Your lighting scenes (optional, can be created in UI)
+          2. `turnouts.json` - Your turnout definitions (optional, can add via UI)
           3. `splash.jpg` - Custom boot image (optional, 800x480px)
           
-          See [README.md](https://github.com/vsi5004/LCC-Lighting-Touchscreen#sd-card-setup) for full configuration details.
+          See [README.md](https://github.com/vsi5004/LCCControlPanelTouchscreen#sd-card-setup) for full configuration details.
         draft: false
         prerelease: false
       env:

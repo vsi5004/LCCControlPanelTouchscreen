@@ -59,7 +59,6 @@ static lv_point_t s_track_points[PANEL_MAX_TRACKS][2];
 #define COLOR_STALE     0xF44336    // Red
 #define COLOR_TRACK     0x424242    // Dark grey for track lines
 #define COLOR_PANEL_BG  0x1E1E1E    // Dark background for layout
-#define COLOR_HEADER_BG 0x333333    // Header bar background
 #define COLOR_ORPHAN    0x795548    // Brown for unresolved turnouts
 
 /** @brief Padding (pixels) inside canvas when auto-fitting the layout */
@@ -420,27 +419,21 @@ void ui_create_panel_screen(void)
     memset(s_item_hitbox, 0, sizeof(s_item_hitbox));
     memset(s_track_lines, 0, sizeof(s_track_lines));
 
-    // --- Header bar with settings button ---
-    lv_obj_t *header = lv_obj_create(scr);
-    lv_obj_remove_style_all(header);
-    lv_obj_set_size(header, PANEL_CANVAS_WIDTH, PANEL_HEADER_HEIGHT);
-    lv_obj_set_pos(header, 0, 0);
-    lv_obj_set_style_bg_color(header, lv_color_hex(COLOR_HEADER_BG), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(header, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_clear_flag(header, LV_OBJ_FLAG_SCROLLABLE);
+    // --- Full-screen canvas area for layout diagram ---
+    s_canvas = lv_obj_create(scr);
+    lv_obj_remove_style_all(s_canvas);
+    lv_obj_set_size(s_canvas, PANEL_CANVAS_WIDTH, PANEL_CANVAS_HEIGHT);
+    lv_obj_set_pos(s_canvas, 0, 0);
+    lv_obj_set_style_bg_color(s_canvas, lv_color_hex(COLOR_PANEL_BG), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(s_canvas, LV_OPA_COVER, LV_PART_MAIN);
+    lv_obj_clear_flag(s_canvas, LV_OBJ_FLAG_SCROLLABLE);
 
-    // Title label
-    lv_obj_t *title = lv_label_create(header);
-    lv_label_set_text(title, "Control Panel");
-    lv_obj_set_style_text_font(title, &lv_font_montserrat_16, LV_PART_MAIN);
-    lv_obj_set_style_text_color(title, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
-    lv_obj_align(title, LV_ALIGN_LEFT_MID, 12, 0);
-
-    // Settings gear button
-    lv_obj_t *settings_btn = lv_btn_create(header);
+    // --- Floating settings gear button (upper-right corner) ---
+    lv_obj_t *settings_btn = lv_btn_create(scr);
     lv_obj_set_size(settings_btn, 40, 36);
-    lv_obj_align(settings_btn, LV_ALIGN_RIGHT_MID, -8, 0);
+    lv_obj_set_pos(settings_btn, PANEL_CANVAS_WIDTH - 40 - 8, 6);
     lv_obj_set_style_bg_color(settings_btn, lv_color_hex(0x555555), LV_PART_MAIN);
+    lv_obj_set_style_bg_opa(settings_btn, LV_OPA_70, LV_PART_MAIN);
     lv_obj_set_style_radius(settings_btn, 6, LV_PART_MAIN);
     lv_obj_add_event_cb(settings_btn, settings_btn_cb, LV_EVENT_CLICKED, NULL);
 
@@ -449,15 +442,6 @@ void ui_create_panel_screen(void)
     lv_obj_set_style_text_font(gear_label, &lv_font_montserrat_16, LV_PART_MAIN);
     lv_obj_set_style_text_color(gear_label, lv_color_hex(0xFFFFFF), LV_PART_MAIN);
     lv_obj_center(gear_label);
-
-    // --- Canvas area for layout diagram ---
-    s_canvas = lv_obj_create(scr);
-    lv_obj_remove_style_all(s_canvas);
-    lv_obj_set_size(s_canvas, PANEL_CANVAS_WIDTH, PANEL_CANVAS_HEIGHT);
-    lv_obj_set_pos(s_canvas, 0, PANEL_HEADER_HEIGHT);
-    lv_obj_set_style_bg_color(s_canvas, lv_color_hex(COLOR_PANEL_BG), LV_PART_MAIN);
-    lv_obj_set_style_bg_opa(s_canvas, LV_OPA_COVER, LV_PART_MAIN);
-    lv_obj_clear_flag(s_canvas, LV_OBJ_FLAG_SCROLLABLE);
 
     // --- Empty state ---
     s_empty_label = lv_label_create(s_canvas);

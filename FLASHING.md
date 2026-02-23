@@ -1,13 +1,13 @@
 # Flashing Guide
 
-This guide covers multiple methods for flashing the LCC Lighting Touchscreen Controller firmware to your Waveshare ESP32-S3 Touch LCD 4.3B.
+This guide covers multiple methods for flashing the LCC Turnout Control Panel firmware to your Waveshare ESP32-S3 Touch LCD 4.3B.
 
 ## Quick Start (Recommended)
 
-Download the merged binary from the [latest release](https://github.com/vsi5004/LCC-Lighting-Touchscreen/releases/latest) and flash to address `0x0`:
+Download the merged binary from the [latest release](https://github.com/vsi5004/LCCControlPanelTouchscreen/releases/latest) and flash to address `0x0`:
 
 ```bash
-esptool.py --chip esp32s3 --port COMX write_flash 0x0 LCCLightingTouchscreen-vX.X.X-XXXXXXX-merged.bin
+esptool.py --chip esp32s3 --port COMX write_flash 0x0 LCCControlPanelTouchscreen-vX.X.X-XXXXXXX-merged.bin
 ```
 
 Replace `COMX` with your serial port (e.g., `COM3` on Windows, `/dev/ttyUSB0` on Linux, `/dev/cu.usbserial-*` on macOS).
@@ -39,8 +39,8 @@ This single-file approach is the simplest and fastest.
 
 ### Step 1: Download
 
-From the [releases page](https://github.com/vsi5004/LCC-Lighting-Touchscreen/releases), download:
-- `LCCLightingTouchscreen-vX.X.X-XXXXXXX-merged.bin`
+From the [releases page](https://github.com/vsi5004/LCCControlPanelTouchscreen/releases), download:
+- `LCCControlPanelTouchscreen-vX.X.X-XXXXXXX-merged.bin`
 
 ### Step 2: Connect Device
 
@@ -51,7 +51,7 @@ From the [releases page](https://github.com/vsi5004/LCC-Lighting-Touchscreen/rel
 ### Step 3: Flash
 
 ```bash
-esptool.py --chip esp32s3 --port COMX write_flash 0x0 LCCLightingTouchscreen-vX.X.X-XXXXXXX-merged.bin
+esptool.py --chip esp32s3 --port COMX write_flash 0x0 LCCControlPanelTouchscreen-vX.X.X-XXXXXXX-merged.bin
 ```
 
 **Optional flags:**
@@ -63,7 +63,7 @@ Example with all options:
 ```bash
 esptool.py --chip esp32s3 --port COM3 --baud 921600 \
   --before default_reset --after hard_reset \
-  write_flash 0x0 LCCLightingTouchscreen-v1.0.0-abc1234-merged.bin
+  write_flash 0x0 LCCControlPanelTouchscreen-v1.0.0-abc1234-merged.bin
 ```
 
 ### Step 4: Verify
@@ -83,7 +83,7 @@ From the releases page, download all files:
 - `bootloader-XXXXXXX.bin`
 - `partition-table-XXXXXXX.bin`
 - `ota_data_initial-XXXXXXX.bin`
-- `LCCLightingTouchscreen-vX.X.X-XXXXXXX.bin`
+- `LCCControlPanelTouchscreen-vX.X.X-XXXXXXX.bin`
 
 ### Step 2: Flash All Partitions
 
@@ -93,7 +93,7 @@ esptool.py --chip esp32s3 --port COMX write_flash \
   0x0 bootloader-XXXXXXX.bin \
   0x8000 partition-table-XXXXXXX.bin \
   0xf000 ota_data_initial-XXXXXXX.bin \
-  0x20000 LCCLightingTouchscreen-vX.X.X-XXXXXXX.bin
+  0x20000 LCCControlPanelTouchscreen-vX.X.X-XXXXXXX.bin
 ```
 
 ### Step 3: Application Only Update
@@ -101,7 +101,7 @@ esptool.py --chip esp32s3 --port COMX write_flash \
 To update just the application (preserves bootloader and partition table):
 
 ```bash
-esptool.py --chip esp32s3 --port COMX write_flash 0x20000 LCCLightingTouchscreen-vX.X.X-XXXXXXX.bin
+esptool.py --chip esp32s3 --port COMX write_flash 0x20000 LCCControlPanelTouchscreen-vX.X.X-XXXXXXX.bin
 ```
 
 ## Method 3: ESP Flash Download Tool (Windows GUI)
@@ -128,13 +128,13 @@ In the download panel, add each file with its address:
 | `bootloader-XXXXXXX.bin` | `0x0` | ☑ |
 | `partition-table-XXXXXXX.bin` | `0x8000` | ☑ |
 | `ota_data_initial-XXXXXXX.bin` | `0xf000` | ☑ |
-| `LCCLightingTouchscreen-vX.X.X-XXXXXXX.bin` | `0x20000` | ☑ |
+| `LCCControlPanelTouchscreen-vX.X.X-XXXXXXX.bin` | `0x20000` | ☑ |
 
 **Or** use the merged binary:
 
 | File | Address (hex) | Checkbox |
 |------|---------------|----------|
-| `LCCLightingTouchscreen-vX.X.X-XXXXXXX-merged.bin` | `0x0` | ☑ |
+| `LCCControlPanelTouchscreen-vX.X.X-XXXXXXX-merged.bin` | `0x0` | ☑ |
 
 ### Step 4: Configure Flash Settings
 
@@ -169,7 +169,7 @@ Some web-based tools support ESP32-S3 flashing via Chrome/Edge's Web Serial API:
    - `0x0`: `bootloader-XXXXXXX.bin`
    - `0x8000`: `partition-table-XXXXXXX.bin`
    - `0xf000`: `ota_data_initial-XXXXXXX.bin`
-   - `0x20000`: `LCCLightingTouchscreen-vX.X.X-XXXXXXX.bin`
+   - `0x20000`: `LCCControlPanelTouchscreen-vX.X.X-XXXXXXX.bin`
 4. Click **Program**
 5. Wait for completion
 
@@ -227,12 +227,16 @@ After successful flashing, configure your device via SD card. See [README.md - S
    ```
    See [Node ID Configuration](#node-id-configuration) below.
 
-2. **`scenes.json`** — Initial lighting scenes (optional, can create in UI):
+2. **`turnouts.json`** — Turnout definitions (optional, can add turnouts via the UI):
    ```json
    {
      "version": 1,
-     "scenes": [
-       { "name": "sunrise", "brightness": 180, "r": 255, "g": 120, "b": 40, "w": 0 }
+     "turnouts": [
+       {
+         "name": "Main Yard Lead",
+         "event_normal": "05.01.01.01.40.00.00.00",
+         "event_reverse": "05.01.01.01.40.00.00.01"
+       }
      ]
    }
    ```
@@ -284,14 +288,14 @@ If you're building from source, you can set a default node ID in the code that w
 4. LCC initialization (2-3 seconds)
 5. Main UI appears
 
-If LCC initialization times out (no CAN bus detected), the device enters degraded mode where the UI is available but lighting commands won't be sent.
+If LCC initialization times out (no CAN bus detected), the device enters degraded mode where the UI is available but turnout commands won't be sent.
 
 ## Over-the-Air (OTA) Updates
 
 After initial flash, you can update firmware over LCC using JMRI without physical USB access. See [README.md - Firmware Updates (OTA)](README.md#firmware-updates-ota) for instructions.
 
 **For OTA updates, use the application-only binary:**
-- `LCCLightingTouchscreen-vX.X.X-XXXXXXX.bin` (NOT the merged binary)
+- `LCCControlPanelTouchscreen-vX.X.X-XXXXXXX.bin` (NOT the merged binary)
 
 ## Verifying Your Flash
 
@@ -299,9 +303,9 @@ After flashing and SD card setup:
 
 1. **Check boot screen** — Should show custom splash or ESP32 logo
 2. **Check LCC initialization** — Status text appears during boot
-3. **Open Scene Selector** — Should show any scenes from `scenes.json`
+3. **Open Turnout Switchboard** — Should show any turnouts from `turnouts.json`
 4. **Test touch** — Tap, swipe, and navigate UI
-5. **Test LCC communication** — Try applying a scene (check your LCC bus activity)
+5. **Test LCC communication** — Try toggling a turnout (check your LCC bus activity)
 
 ## Building From Source
 
@@ -309,8 +313,8 @@ If you prefer to build your own binaries:
 
 ```bash
 # Clone with submodules
-git clone --recursive https://github.com/vsi5004/LCC-Lighting-Touchscreen.git
-cd LCC-Lighting-Touchscreen
+git clone --recursive https://github.com/vsi5004/LCCControlPanelTouchscreen.git
+cd LCCControlPanelTouchscreen
 
 # Set target
 idf.py set-target esp32s3
@@ -329,7 +333,7 @@ See [README.md - Building](README.md#building) for detailed build instructions i
 - **ESP-IDF Documentation**: [Flash Download Tool Guide](https://docs.espressif.com/projects/esp-idf/en/latest/esp32s3/api-guides/tools/idf-py.html)
 - **esptool Documentation**: [https://github.com/espressif/esptool](https://github.com/espressif/esptool)
 - **OpenLCB Node ID Registry**: [https://registry.openlcb.org/](https://registry.openlcb.org/)
-- **Project Issues**: [GitHub Issues](https://github.com/vsi5004/LCC-Lighting-Touchscreen/issues)
+- **Project Issues**: [GitHub Issues](https://github.com/vsi5004/LCCControlPanelTouchscreen/issues)
 
 ## Getting Help
 

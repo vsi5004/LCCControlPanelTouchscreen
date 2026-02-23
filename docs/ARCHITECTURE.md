@@ -481,14 +481,14 @@ effective because tracks typically cluster around a small number of turnouts.
 ### Panel Screen (`ui_panel.c`)
 
 The control panel screen is the **default boot screen**. It displays:
-- A header bar with the node ID and a settings gear icon button
-- The panel diagram: placed turnout Y-shapes with color-coded state (green=closed,
-  red=thrown, grey=unknown) and track segments connecting them
+- A full-screen panel diagram: placed turnout Y-shapes with color-coded state
+  (green=closed, red=thrown, grey=unknown) and track segments connecting them
+- A floating settings gear icon in the upper-right corner for navigation
 - Tap a turnout to toggle its state (sends LCC event)
 
 **Auto-Fit Scaling:** The panel renderer computes the bounding box of all placed
 items and endpoints, then calculates a uniform scale factor and center offset to
-maximize the layout within the 800×440 canvas area. A 20px margin prevents items
+maximize the layout within the full 800×480 screen. A 20px margin prevents items
 from touching the edges. Line widths and hitbox sizes scale proportionally, with
 minimums enforced (2px lines, 40×30 hitboxes) for visibility and touch targets.
 
@@ -510,7 +510,7 @@ designing the control panel layout:
 - Mode buttons: Place Turnout, Place Endpoint, Delete, Save
 
 **Canvas:**
-- 800×440 pixel drawing area with grid snapping (20px)
+- 800×480 pixel drawing area with grid snapping (20px)
 - Placed turnouts rendered as Y-shapes with rotation/mirror support
 - Track endpoints shown as red circles, track segments as white lines
 - Drag to reposition items, tap to select

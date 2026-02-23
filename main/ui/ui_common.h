@@ -187,14 +187,9 @@ void ui_add_turnout_clear_discoveries(void);
 #define PANEL_CANVAS_WIDTH  800
 
 /**
- * @brief Height of the panel canvas area (screen height minus header bar)
+ * @brief Height of the panel canvas area (full screen height)
  */
-#define PANEL_CANVAS_HEIGHT 440
-
-/**
- * @brief Header bar height on the panel screen (contains settings button)
- */
-#define PANEL_HEADER_HEIGHT 40
+#define PANEL_CANVAS_HEIGHT 480
 
 // ----- Panel Screen Functions -----
 
